@@ -301,6 +301,12 @@ def gift_wrap_hull(points: np.ndarray, tol: float = 1e-12) -> HullResult:
 
     simplices_arr = _retriangulate_flat_faces(pts, np.asarray(simplices, dtype=np.int64))
     normals = np.array([_facet_normal(pts, *tri) for tri in simplices_arr])
+    if simplices_arr.ndim != 2 or len(simplices_arr) < 4:
+        raise ConvexHullError(
+            f"gift wrapping produced {len(simplices_arr)} facets from "
+            f"{len(pts)} points; the cloud is degenerate (collapsed, "
+            "collinear or coplanar)"
+        )
     offsets = -np.einsum("ij,ij->i", normals, pts[simplices_arr[:, 0]])
     return HullResult(
         points=pts,
@@ -369,13 +375,13 @@ def _initial_facet(pts: np.ndarray, tol: float) -> tuple[int, int, int]:
     phi[a] = np.inf
     phi[np.linalg.norm(rel, axis=1) <= tol] = np.inf
     if not np.isfinite(phi).any():  # pragma: no cover - all points coincide
-        raise ValueError("degenerate point set: no two distinct points")
+        raise ConvexHullError("degenerate point set: no two distinct points")
     b = int(np.argmin(phi))
     n0 = np.cos(phi[b]) * down + np.sin(phi[b]) * w
 
     c = _pivot(pts, a, b, n0, tol)
     if c is None:  # pragma: no cover - collinear point set
-        raise ValueError("degenerate point set: all points are collinear")
+        raise ConvexHullError("degenerate point set: all points are collinear")
 
     tri = (b, a, c)
     n = _facet_normal(pts, *tri)

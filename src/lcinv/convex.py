@@ -543,8 +543,14 @@ class HarmonicInversion(_ConvexInversionBase):
         return coeffs, spin, law
 
     def areas_from_coefficients(self, coeffs: np.ndarray) -> np.ndarray:
-        """Eq. (8) and (10): ``g_j = exp(sum a_lm Y_lm(n_j)) Delta sigma_j``."""
-        return np.exp(self.basis @ coeffs) * self.geometry.sphere_areas
+        """Eq. (8) and (10): ``g_j = exp(sum a_lm Y_lm(n_j)) Delta sigma_j``.
+
+        The exponent is clipped before exponentiating.  Eq. (6) makes every
+        ``g_j`` positive for *any* coefficients, which is the whole point, but
+        it also means a wild trial vector can overflow; clipping keeps such a
+        proposal finite so the caller sees a bad chi-squared rather than a NaN.
+        """
+        return np.exp(np.clip(self.basis @ coeffs, -300.0, 300.0)) * self.geometry.sphere_areas
 
     def _pack_initial(self, coeffs: np.ndarray) -> np.ndarray:
         parts = [coeffs]

@@ -50,8 +50,12 @@ class MinkowskiResult:
     distances:
         ``(M,)`` plane distances ``l`` from the origin.
     areas:
-        ``(M,)`` realised facet areas; zero where a normal does not appear on
-        the body.
+        ``(M,)`` realised facet areas, aligned with the *input* normals; zero
+        where a normal does not appear on the body.
+    dark_area:
+        Area of the extra closing facet of Section 3.3, or ``0`` if none was
+        needed.  The paper notes it "is completely dark, but its existence does
+        not affect the overall shape".
     n_iterations:
         Conjugate-gradient iterations actually used.
     alignment:
@@ -67,6 +71,7 @@ class MinkowskiResult:
     polyhedron: Polyhedron
     distances: np.ndarray
     areas: np.ndarray
+    dark_area: float
     n_iterations: int
     alignment: float
     converged: bool
@@ -233,7 +238,7 @@ def minkowski_solve(
     normals: np.ndarray,
     areas: np.ndarray,
     max_iter: int = 200,
-    tol: float = 1e-8,
+    tol: float = 1e-7,
     close: bool = True,
     center: bool = True,
     verbose: bool = False,
@@ -257,7 +262,8 @@ def minkowski_solve(
     max_iter:
         Maximum conjugate-gradient iterations.
     tol:
-        Convergence threshold on ``1 - alignment``.
+        Convergence threshold on ``1 - alignment``.  The default of ``1e-7``
+        already pins the axis ratios to well below a part in a thousand.
     close:
         Apply :func:`close_facet_areas` first, per Section 3.3.
     center:
@@ -293,7 +299,10 @@ def minkowski_solve(
     if np.any(g < 0):
         raise ValueError("facet areas must be non-negative")
     n = n / np.linalg.norm(n, axis=1, keepdims=True)
-    n, g, _ = merge_duplicate_normals(n, g)
+    requested = g.copy()
+    n, g, inverse = merge_duplicate_normals(n, g)
+    merged = g.copy()
+    n_merged = len(g)
     if close:
         n, g = close_facet_areas(n, g)
 
@@ -371,10 +380,21 @@ def minkowski_solve(
     body = body.scaled(scale)
     if center:
         body = body.centered()
+
+    # Undo the merge so the caller sees one area per normal it passed in,
+    # splitting each merged facet in the ratio of the areas that were asked for.
+    scaled = realised * scale**2
+    share = np.divide(
+        requested, merged[inverse], out=np.ones_like(requested), where=merged[inverse] > 0
+    )
+    out_areas = scaled[:n_merged][inverse] * share
+    dark = float(scaled[n_merged]) if len(scaled) > n_merged else 0.0
+
     return MinkowskiResult(
         polyhedron=body,
         distances=l * scale,
-        areas=realised * scale**2,
+        areas=out_areas,
+        dark_area=dark,
         n_iterations=it,
         alignment=alignment,
         converged=bool(1.0 - alignment < tol),

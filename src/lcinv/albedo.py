@@ -94,9 +94,17 @@ class AlbedoSeparation:
     albedo_range:
         ``(a, b)`` of Eq. (12).
     lambda_shape:
-        ``lambda_s``, the weight of the convexity term.  Keep it small.
+        ``lambda_s``, the weight of the convexity term.
     lambda_albedo:
         ``lambda_varpi``, the weight of the smoothing term.  Keep it small.
+        The first term of Eq. (11) can be driven to zero exactly (there are
+        two unknowns per facet and one datum), so it is really the *ratio*
+        ``lambda_s / lambda_varpi`` that chooses a solution inside that null
+        space: raising it pushes brightness variation into the albedo, and
+        lowering it pushes it into the shape.
+    anchor_mean_albedo:
+        Pin the mean albedo to the middle of ``albedo_range`` to remove the
+        pure scale degeneracy between ``s`` and ``varpi``.
     neighbours:
         Facet adjacency for the smoothing term; taken from the geometry's own
         triangulation when omitted.
@@ -107,9 +115,10 @@ class AlbedoSeparation:
         geometry: FacetGeometry,
         areas: np.ndarray,
         albedo_range: tuple[float, float] = (0.5, 1.5),
-        lambda_shape: float = 1e-3,
-        lambda_albedo: float = 1e-3,
+        lambda_shape: float = 1.0,
+        lambda_albedo: float = 1e-4,
         neighbours: "list[np.ndarray] | None" = None,
+        anchor_mean_albedo: bool = True,
     ) -> None:
         self.geometry = geometry
         self.g = np.asarray(areas, dtype=float).ravel()
@@ -120,6 +129,8 @@ class AlbedoSeparation:
             raise ValueError("albedo_range must be increasing")
         self.lambda_shape = float(lambda_shape)
         self.lambda_albedo = float(lambda_albedo)
+        self.anchor_mean_albedo = bool(anchor_mean_albedo)
+        self._mean_albedo = 0.5 * (self.low + self.high)
         self.neighbours = neighbours if neighbours is not None else geometry.neighbours()
 
         # Flattened adjacency pairs for the smoothing residuals.
@@ -135,13 +146,23 @@ class AlbedoSeparation:
 
     def _residuals(self, params: np.ndarray) -> np.ndarray:
         s, w = self._unpack(params)
+        # Every block is made dimensionless by the total facet value, so the
+        # two weights are comparable regardless of how g is scaled.
+        total = max(float(self.g.sum()), 1e-300)
         # First term of Eq. (11).
-        misfit = self.g - s * w
+        misfit = (self.g - s * w) / total
         # Second: the convexity constraint Eq. (3) on the area part alone.
-        conv = np.sqrt(self.lambda_shape) * (s @ self.geometry.normals)
+        conv = np.sqrt(self.lambda_shape) * (s @ self.geometry.normals) / total
         # Third: f(varpi) = sum_j sum_i (varpi_ij / varpi_j - 1)^2.
         smooth = np.sqrt(self.lambda_albedo) * (w[self._pair_i] / w[self._pair_j] - 1.0)
-        return np.concatenate([misfit, conv, smooth])
+        blocks = [misfit, conv, smooth]
+        if self.anchor_mean_albedo:
+            # (s, varpi) -> (k s, varpi / k) leaves the product untouched, so
+            # the split has a free overall scale that no term in Eq. (11)
+            # controls.  Pinning the mean albedo removes exactly that freedom
+            # and nothing else.
+            blocks.append(np.array([float(w.mean()) - self._mean_albedo]))
+        return np.concatenate(blocks)
 
     def run(
         self, max_nfev: int = 200, verbose: bool = False
