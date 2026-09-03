@@ -34,6 +34,7 @@ from enum import Enum
 
 import numpy as np
 from scipy.optimize import least_squares, minimize
+from scipy.spatial import cKDTree
 
 from .geometry import SpinState, unit_to_spherical
 from .lightcurve import LightcurveSet
@@ -41,7 +42,7 @@ from .mesh import Polyhedron
 from .minkowski import MinkowskiResult, minkowski_solve
 from .scattering import LommelSeeligerLambert, ScatteringLaw
 from .sphharm import design_matrix, n_coefficients
-from .triangulation import octant_triangulation
+from .triangulation import facet_adjacency, octant_triangulation
 
 __all__ = [
     "Objective",
@@ -88,6 +89,10 @@ class FacetGeometry:
 
     normals: np.ndarray
     sphere_areas: np.ndarray
+    #: Triangulation the normals came from, kept so that Section 3.3's albedo
+    #: smoothing can use "the adjacency relations [...] of the octant
+    #: triangulation".
+    sphere_facets: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.normals = np.ascontiguousarray(self.normals, dtype=float)
@@ -108,7 +113,7 @@ class FacetGeometry:
         """
         s = octant_triangulation(n_rows)
         body = Polyhedron(s.vertices, s.facets)
-        return cls(body.normals, body.areas)
+        return cls(body.normals, body.areas, s.facets)
 
     @classmethod
     def from_ellipsoid(cls, a: float, b: float, c: float, n_rows: int = 8) -> "FacetGeometry":
@@ -122,11 +127,23 @@ class FacetGeometry:
         """
         s = octant_triangulation(n_rows)
         body = Polyhedron(s.vertices * np.array([a, b, c], dtype=float), s.facets)
-        return cls(body.normals, body.areas)
+        return cls(body.normals, body.areas, s.facets)
 
     def spherical(self) -> tuple[np.ndarray, np.ndarray]:
         """Polar angle and azimuth of the normals, ``(theta_j, psi_j)``."""
         return unit_to_spherical(self.normals)
+
+    def neighbours(self) -> list[np.ndarray]:
+        """Adjacent facets, for the albedo smoothing of Section 3.3.
+
+        Uses the octant triangulation the normals came from when it is known,
+        and otherwise falls back to the three nearest normal directions.
+        """
+        if self.sphere_facets is not None:
+            return facet_adjacency(self.sphere_facets)
+        tree = cKDTree(self.normals)
+        _, idx = tree.query(self.normals, k=4)
+        return [np.asarray([j for j in row[1:]], dtype=np.int64) for row in idx]
 
 
 def nonconvexity_residual(geometry: FacetGeometry, areas: np.ndarray) -> np.ndarray:

@@ -29,6 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 
 __all__ = [
+    "facet_adjacency",
     "OctantTriangulation",
     "octant_triangulation",
     "triangulated_ellipsoid",
@@ -240,3 +241,40 @@ def facet_normals_and_areas(
     areas = 0.5 * norm
     safe = np.where(norm > 0, norm, 1.0)
     return cross / safe[:, None], areas, (a + b + c) / 3.0
+
+
+def facet_adjacency(facets: np.ndarray) -> list[np.ndarray]:
+    """Facets sharing an edge with each facet.
+
+    Section 3.3 needs these for the albedo smoothing term
+    ``f(varpi) = sum_j sum_i (varpi_ij / varpi_j - 1)^2``, where "the
+    adjacency relations are not known at this stage, but a very good
+    approximation is to use those of the octant triangulation".
+
+    Parameters
+    ----------
+    facets:
+        ``(F, 3)`` vertex indices.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        For each facet, the indices of the facets sharing one of its edges
+        (normally three, fewer on an open surface).
+    """
+    f = np.asarray(facets, dtype=np.int64)
+    edges = np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]])
+    owner = np.tile(np.arange(len(f)), 3)
+    keys = np.sort(edges, axis=1)
+    order = np.lexsort((keys[:, 1], keys[:, 0]))
+    keys, owner = keys[order], owner[order]
+
+    neighbours: list[list[int]] = [[] for _ in range(len(f))]
+    start = 0
+    for i in range(1, len(keys) + 1):
+        if i == len(keys) or not np.array_equal(keys[i], keys[start]):
+            group = owner[start:i]
+            for a in group:
+                neighbours[a].extend(int(b) for b in group if b != a)
+            start = i
+    return [np.asarray(sorted(set(n)), dtype=np.int64) for n in neighbours]
