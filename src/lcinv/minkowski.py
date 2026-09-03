@@ -348,7 +348,9 @@ def minkowski_solve(
         if not neg.any():
             t_max = float(np.linalg.norm(l) / max(np.linalg.norm(direction), 1e-300))
 
-        def negative_volume(t: float) -> float:
+        def negative_volume(t: float, l=l, direction=direction) -> float:
+            # `l` and `direction` are bound as defaults: the closure is only
+            # ever called inside this iteration, but binding makes that explicit.
             trial = l + t * direction
             if np.any(trial <= 0):  # pragma: no cover - guarded by t_max
                 return np.inf

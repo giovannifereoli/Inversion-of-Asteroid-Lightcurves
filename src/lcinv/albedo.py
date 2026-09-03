@@ -117,7 +117,7 @@ class AlbedoSeparation:
         albedo_range: tuple[float, float] = (0.5, 1.5),
         lambda_shape: float = 1.0,
         lambda_albedo: float = 1e-4,
-        neighbours: "list[np.ndarray] | None" = None,
+        neighbours: list[np.ndarray] | None = None,
         anchor_mean_albedo: bool = True,
     ) -> None:
         self.geometry = geometry

@@ -260,7 +260,7 @@ class CylindricalShapeSeries:
         return np.asarray(faces, dtype=np.int64)
 
     @classmethod
-    def from_body(cls, body: Polyhedron, margin: float = 0.02, **kwargs) -> "CylindricalShapeSeries":
+    def from_body(cls, body: Polyhedron, margin: float = 0.02, **kwargs) -> CylindricalShapeSeries:
         """Size the cylinder from an existing body's extent along ``x``.
 
         Section 4: "``rho`` is set to 0 at the two endpoints ``x-``, ``x+``,
@@ -387,7 +387,7 @@ class NonconvexInversion:
         self,
         data: LightcurveSet,
         spin: SpinState,
-        series: "RadialShapeSeries | CylindricalShapeSeries | None" = None,
+        series: RadialShapeSeries | CylindricalShapeSeries | None = None,
         law: ScatteringLaw | None = None,
         objective: Objective | str = Objective.RELATIVE,
         regularisation: float = 0.0,

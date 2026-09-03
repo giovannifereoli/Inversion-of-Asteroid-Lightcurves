@@ -79,7 +79,7 @@ class ScatteringLaw(ABC):
         """Free parameters as a flat array (empty when the law is fixed)."""
         return np.zeros(0)
 
-    def with_parameters(self, values: np.ndarray) -> "ScatteringLaw":
+    def with_parameters(self, values: np.ndarray) -> ScatteringLaw:
         """Return a copy with :attr:`parameters` replaced by ``values``.
 
         This is what lets Section 5's "additional parameters, for example,
@@ -185,7 +185,7 @@ class LommelSeeligerLambert(ScatteringLaw):
             return np.array([self.lambert_weight])
         return np.concatenate([[self.lambert_weight], self.phase_function.parameters])
 
-    def with_parameters(self, values: np.ndarray) -> "LommelSeeligerLambert":
+    def with_parameters(self, values: np.ndarray) -> LommelSeeligerLambert:
         values = np.asarray(values, dtype=float)
         if self.phase_function is None:
             if values.size != 1:
@@ -253,7 +253,7 @@ class Hapke(ScatteringLaw):
     def parameters(self) -> np.ndarray:
         return np.array([self.w, self.g, self.b0, self.h, self.roughness])
 
-    def with_parameters(self, values: np.ndarray) -> "Hapke":
+    def with_parameters(self, values: np.ndarray) -> Hapke:
         v = np.asarray(values, dtype=float)
         if v.size != 5:
             raise ValueError("expected 5 parameters (w, g, b0, h, roughness)")
@@ -261,7 +261,7 @@ class Hapke(ScatteringLaw):
 
 
 def make_scattering_law(
-    lsm: str, params: "list[float | None] | np.ndarray | None" = None
+    lsm: str, params: list[float | None] | np.ndarray | None = None
 ) -> ScatteringLaw:
     """Build a law from a DAMIT ``lsm`` code and its ``lsm_p1 ... lsm_p5``.
 

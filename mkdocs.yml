@@ -1,0 +1,46 @@
+site_name: lcinv
+site_description: Asteroid lightcurve inversion after Kaasalainen & Torppa (2001)
+repo_url: https://github.com/gife3672/Inversion-of-Asteroid-Lightcurves
+theme:
+  name: material
+  features: [navigation.sections, content.code.copy, navigation.top]
+  palette:
+    - scheme: default
+      primary: blue grey
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - scheme: slate
+      primary: blue grey
+      toggle: {icon: material/weather-sunny, name: Light mode}
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - The method:
+      - Direct problem (Section 2): direct-problem.md
+      - Convex inversion (Section 3): convex-inversion.md
+      - Shape reconstruction (Appendix C): minkowski.md
+      - Nonconvex inversion (Section 4): nonconvex.md
+      - The complete recipe (Paper II): pipeline.md
+      - Bayesian inversion: bayesian.md
+  - Validation: validation.md
+  - Working with real data: damit.md
+  - API reference: api.md
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.arithmatex: {generic: true}
+  - tables
+  - toc: {permalink: true}
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: numpy
+            show_source: false
+            heading_level: 3
+            members_order: source

@@ -139,7 +139,7 @@ class Lightcurve:
         s, e = self.unit_vectors()
         return spin.to_asteroid_frame(s, self.jd), spin.to_asteroid_frame(e, self.jd)
 
-    def light_time_corrected(self) -> "Lightcurve":
+    def light_time_corrected(self) -> Lightcurve:
         """Copy with epochs reduced by the asteroid-Earth light travel time.
 
         DAMIT epochs are already corrected, so this is only for data brought in
@@ -156,7 +156,7 @@ class Lightcurve:
             dict(self.meta, light_time_corrected=True),
         )
 
-    def with_noise(self, level: float, seed: int | None = None) -> "Lightcurve":
+    def with_noise(self, level: float, seed: int | None = None) -> Lightcurve:
         """Copy with multiplicative Gaussian noise of relative size ``level``.
 
         Section 3.5 reports that "even considerable noise (from 5 to 10%) [...]
@@ -185,7 +185,7 @@ class LightcurveSet:
     exactly those numbers.
     """
 
-    def __init__(self, curves: "list[Lightcurve] | tuple[Lightcurve, ...]" = ()) -> None:
+    def __init__(self, curves: list[Lightcurve] | tuple[Lightcurve, ...] = ()) -> None:
         self.curves: list[Lightcurve] = list(curves)
 
     def __len__(self) -> int:
@@ -251,7 +251,7 @@ class LightcurveSet:
         min_phase_deg: float | None = None,
         max_phase_deg: float | None = None,
         calibrated: bool | None = None,
-    ) -> "LightcurveSet":
+    ) -> LightcurveSet:
         """Select a subset by point count, phase-angle range or calibration."""
         out = []
         for c in self.curves:
@@ -267,7 +267,7 @@ class LightcurveSet:
             out.append(c)
         return LightcurveSet(out)
 
-    def select_geometries(self, n: int, seed: int | None = 0) -> "LightcurveSet":
+    def select_geometries(self, n: int, seed: int | None = 0) -> LightcurveSet:
         """Pick ``n`` curves spread as widely as possible in observing geometry.
 
         Greedy farthest-point selection on the mean phase-angle-bisector
@@ -309,7 +309,7 @@ class LightcurveSet:
             "max_amplitude_mag": float(max(c.amplitude_mag for c in self.curves)),
         }
 
-    def with_noise(self, level: float, seed: int | None = 0) -> "LightcurveSet":
+    def with_noise(self, level: float, seed: int | None = 0) -> LightcurveSet:
         """Copy with independent noise added to every curve."""
         rng = np.random.default_rng(seed)
         return LightcurveSet(
@@ -320,7 +320,7 @@ class LightcurveSet:
     # I/O
     # ------------------------------------------------------------------
     @classmethod
-    def from_damit_txt(cls, path: str | Path) -> "LightcurveSet":
+    def from_damit_txt(cls, path: str | Path) -> LightcurveSet:
         """Read a DAMIT ``lc.txt`` export.
 
         The format is: total number of lightcurves; then per curve a header
@@ -366,7 +366,7 @@ class LightcurveSet:
         Path(path).write_text("\n".join(lines) + "\n")
 
     @classmethod
-    def from_damit_json(cls, path: str | Path) -> "LightcurveSet":
+    def from_damit_json(cls, path: str | Path) -> LightcurveSet:
         """Read a DAMIT ``lc.json`` export, keeping its per-curve metadata.
 
         The JSON export is a list of ``{"LightCurve": {...}, "Reference":

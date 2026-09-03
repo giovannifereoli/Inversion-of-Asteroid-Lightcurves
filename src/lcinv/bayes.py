@@ -69,7 +69,7 @@ class BayesResult:
     acceptance_fraction: float
     autocorr_time: np.ndarray | None
     best: np.ndarray
-    _owner: "BayesianInversion | None" = field(default=None, repr=False)
+    _owner: BayesianInversion | None = field(default=None, repr=False)
 
     def summary(self, quantiles: tuple[float, float, float] = (16.0, 50.0, 84.0)) -> dict:
         """Median and 1-sigma-equivalent percentile ranges per parameter."""
@@ -224,11 +224,12 @@ class BayesianInversion:
 
         pos = self._n_coef
         if self.fit_pole:
-            lam, beta = theta[pos], theta[pos + 1]
+            beta = theta[pos + 1]
             pos += 2
             if not -90.0 <= beta <= 90.0:
                 return -np.inf
             # Isotropic pole prior: equal probability per unit solid angle.
+            # Longitude is uniform, so it contributes only a constant.
             lp += np.log(max(np.cos(np.radians(beta)), 1e-12))
         if self.fit_period:
             period = theta[pos]
@@ -279,7 +280,7 @@ class BayesianInversion:
         n_walkers: int,
         seed: int | None = 0,
         axes: tuple[float, float, float] = (1.3, 1.0, 0.9),
-        start: "np.ndarray | None" = None,
+        start: np.ndarray | None = None,
         pole_scatter: float = 1.0,
     ) -> np.ndarray:
         """A tight ball of walkers around a starting point.
@@ -341,7 +342,7 @@ class BayesianInversion:
         seed: int | None = 0,
         progress: bool = False,
         pool=None,
-        start: "np.ndarray | None" = None,
+        start: np.ndarray | None = None,
         pole_scatter: float = 1.0,
     ) -> BayesResult:
         """Sample the posterior.

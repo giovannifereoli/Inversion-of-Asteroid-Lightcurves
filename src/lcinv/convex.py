@@ -105,7 +105,7 @@ class FacetGeometry:
         return len(self.normals)
 
     @classmethod
-    def from_sphere(cls, n_rows: int = 8) -> "FacetGeometry":
+    def from_sphere(cls, n_rows: int = 8) -> FacetGeometry:
         """Facet normals of an octant-triangulated unit sphere (``8 N^2`` of them).
 
         ``n_rows = 8`` gives 512 normals and ``n_rows = 11`` gives 968, the
@@ -116,7 +116,7 @@ class FacetGeometry:
         return cls(body.normals, body.areas, s.facets)
 
     @classmethod
-    def from_ellipsoid(cls, a: float, b: float, c: float, n_rows: int = 8) -> "FacetGeometry":
+    def from_ellipsoid(cls, a: float, b: float, c: float, n_rows: int = 8) -> FacetGeometry:
         """Facet normals of a triangulated triaxial ellipsoid.
 
         Section 3.5 warns that this uses prior information: "when the
@@ -531,7 +531,10 @@ class HarmonicInversion(_ConvexInversionBase):
         pos = k
         spin, law = self.spin, self.model.law
         if self.fit_pole:
-            spin = SpinState(params[pos], params[pos + 1], spin.period, spin.t0, spin.phi0, spin.yorp)
+            spin = SpinState(
+                params[pos], params[pos + 1], spin.period,
+                spin.t0, spin.phi0, spin.yorp,
+            )
             pos += 2
         if self.fit_period:
             spin = SpinState(spin.lam, spin.beta, params[pos], spin.t0, spin.phi0, spin.yorp)
@@ -621,7 +624,11 @@ class HarmonicInversion(_ConvexInversionBase):
         -------
         InversionResult
         """
-        coeffs0 = self.initial_coefficients(*axes) if initial is None else np.asarray(initial, float)
+        coeffs0 = (
+            self.initial_coefficients(*axes)
+            if initial is None
+            else np.asarray(initial, dtype=float)
+        )
         self._fixed_a00 = float(coeffs0[0])
         p0 = self._pack_initial(coeffs0)
 

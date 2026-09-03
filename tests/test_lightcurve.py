@@ -92,7 +92,7 @@ class TestLightcurveSet:
         data.to_damit_txt(path)
         back = LightcurveSet.from_damit_txt(path)
         assert len(back) == len(data)
-        for a, b in zip(data, back):
+        for a, b in zip(data, back, strict=True):
             assert a.jd == pytest.approx(b.jd, abs=1e-6)
             assert a.brightness == pytest.approx(b.brightness, rel=1e-5)
             assert a.calibrated == b.calibrated

@@ -64,30 +64,44 @@ __all__ = [
 ]
 
 
-def period_sampling_interval(data: LightcurveSet, coefficient: float = 0.8) -> float:
-    """Step 1 - the spacing of the local ``chi^2(P)`` minima, in hours.
+def period_sampling_interval(
+    data: LightcurveSet, t0: float | None = None, coefficient: float = 0.8
+) -> float:
+    """Step 1 - the spacing of the local ``chi^2(P)`` minima.
 
-    Paper II derives the separation of adjacent period minima from the total
-    time span ``T`` of the data: two trial periods become distinguishable once
-    the accumulated rotational phase drifts by about half a turn, giving
-    ``dP ~ coefficient P^2 / (2 T)``.  Scanning on a grid coarser than this
-    steps over minima.
+    Paper II, Eq. (2):
+
+        The smallest separation ``dP`` of the local minima in the trial period
+        ``P`` spectrum of the ``chi^2`` of the lightcurve fit is roughly given
+        by ``dP / P = P / (2 T)``, where ``T = max(|t - t0|)`` within the
+        lightcurve set.  This derives from the phenomenon that if ``P`` is
+        changed by ``dP``, the minima and maxima of the model lightcurve at
+        ``t0 +- T`` will undergo a phase shift of ``pi``.
+
+    Scanning on a grid coarser than ``dP`` steps straight over minima; Fig. 1
+    of Paper II shows what that looks like.
 
     Parameters
     ----------
     data:
-        The observations; only their time span is used.
+        The observations; only their epochs are used.
+    t0:
+        Reference epoch; the earliest observation by default, which makes
+        ``T`` the full time span.
     coefficient:
-        Safety factor; below one oversamples.
+        Safety factor applied to Eq. (2).  Below one oversamples, which is the
+        safe direction.
 
     Returns
     -------
     float
-        Sampling interval *per unit ``P^2``*, in hours per hour-squared, so
-        that the interval at period ``P`` is ``interval * P**2``.
+        The interval *per unit ``P^2``*, so that the sampling interval at
+        period ``P`` is ``interval * P**2`` in the same units as ``P``.
     """
     jd = np.concatenate([c.jd for c in data])
-    span_hours = float(jd.max() - jd.min()) * 24.0
+    if t0 is None:
+        t0 = float(jd.min())
+    span_hours = float(np.max(np.abs(jd - t0))) * 24.0
     if span_hours <= 0:
         raise ValueError("lightcurves span no time")
     return float(coefficient / (2.0 * span_hours))
@@ -97,7 +111,7 @@ def period_scan(
     data: LightcurveSet,
     period_range: tuple[float, float],
     geometry: FacetGeometry | None = None,
-    poles: "np.ndarray | None" = None,
+    poles: np.ndarray | None = None,
     law: ScatteringLaw | None = None,
     lmax: int = 2,
     t0: float | None = None,
@@ -155,7 +169,7 @@ def period_scan(
     lo, hi = float(period_range[0]), float(period_range[1])
     if not 0 < lo < hi:
         raise ValueError("period_range must be positive and increasing")
-    rate = period_sampling_interval(data, coefficient)
+    rate = period_sampling_interval(data, t0, coefficient)
 
     periods: list[float] = [lo]
     while periods[-1] < hi:
@@ -239,7 +253,7 @@ class PipelineResult:
     trials: list[InversionResult] = field(default_factory=list)
     pole_scatter: float | None = None
     period_scatter: float | None = None
-    period_scan: "tuple[np.ndarray, np.ndarray] | None" = None
+    period_scan: tuple[np.ndarray, np.ndarray] | None = None
     log: list[str] = field(default_factory=list)
 
     @property
@@ -315,12 +329,12 @@ class InversionPipeline:
     def run(
         self,
         spin: SpinState,
-        convexity_weights: "tuple[float, ...]" = (0.1, 1.0),
+        convexity_weights: tuple[float, ...] = (0.1, 1.0),
         fit_pole: bool = True,
         fit_period: bool = True,
         fit_scattering: bool = False,
         refine_facets: bool = True,
-        separate_albedo: "bool | None" = None,
+        separate_albedo: bool | None = None,
         nonconvexity_threshold: float = 0.01,
         reconstruct: bool = True,
         n_restarts: int = 0,
@@ -448,9 +462,10 @@ class InversionPipeline:
         if n_restarts > 0:
             rng = np.random.default_rng(seed)
             for k in range(n_restarts):
+                beta = chosen.spin.beta + rng.normal(scale=restart_scatter)
                 jitter = SpinState(
                     chosen.spin.lam + rng.normal(scale=restart_scatter),
-                    float(np.clip(chosen.spin.beta + rng.normal(scale=restart_scatter), -89.9, 89.9)),
+                    float(np.clip(beta, -89.9, 89.9)),
                     chosen.spin.period,
                     chosen.spin.t0, chosen.spin.phi0, chosen.spin.yorp,
                 )

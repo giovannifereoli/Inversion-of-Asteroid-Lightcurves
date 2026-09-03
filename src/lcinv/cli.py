@@ -68,8 +68,8 @@ def _cmd_invert(args: argparse.Namespace) -> int:
 
 def _cmd_demo(args: argparse.Namespace) -> int:
     from .convex import FacetGeometry, HarmonicInversion
-    from .lightcurve import Lightcurve, LightcurveSet
     from .geometry import SpinState
+    from .lightcurve import Lightcurve, LightcurveSet
     from .raytracer import RayTracer
     from .scattering import LommelSeeligerLambert
     from .shapes import paper_shape
@@ -105,11 +105,14 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     shape = result.shape(geometry)
     ex, ex_true = shape.polyhedron.extents(), hull.extents()
     print(f"recovered a:b:c = {ex[0] / ex[2]:.3f} : {ex[1] / ex[2]:.3f} : 1.000")
-    print(f"convex hull     = {ex_true[0] / ex_true[2]:.3f} : {ex_true[1] / ex_true[2]:.3f} : 1.000")
+    print(
+        f"convex hull     = {ex_true[0] / ex_true[2]:.3f} : "
+        f"{ex_true[1] / ex_true[2]:.3f} : 1.000"
+    )
     return 0
 
 
-def main(argv: "list[str] | None" = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Entry point for the ``lcinv`` command."""
     parser = argparse.ArgumentParser(
         prog="lcinv",
@@ -121,16 +124,24 @@ def main(argv: "list[str] | None" = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--cache", default="data/damit", help="download cache directory")
 
-    p_fetch = sub.add_parser("fetch", parents=[common], help="download a DAMIT model and its lightcurves")
+    p_fetch = sub.add_parser(
+        "fetch", parents=[common], help="download a DAMIT model and its lightcurves"
+    )
     p_fetch.add_argument("model", type=int, help="DAMIT model id, e.g. 4966")
     p_fetch.set_defaults(func=_cmd_fetch)
 
-    p_inv = sub.add_parser("invert", parents=[common], help="run the full inversion on a DAMIT target")
+    p_inv = sub.add_parser(
+        "invert", parents=[common], help="run the full inversion on a DAMIT target"
+    )
     p_inv.add_argument("model", type=int, help="DAMIT model id, e.g. 4966")
     p_inv.add_argument("--rows", type=int, default=7, help="octant rows (facets = 8 N^2)")
     p_inv.add_argument("--lmax", type=int, default=6, help="harmonic truncation degree")
-    p_inv.add_argument("--max-curves", type=int, default=0, help="use at most this many lightcurves")
-    p_inv.add_argument("--restarts", type=int, default=0, help="perturbed restarts for error estimates")
+    p_inv.add_argument(
+        "--max-curves", type=int, default=0, help="use at most this many lightcurves"
+    )
+    p_inv.add_argument(
+        "--restarts", type=int, default=0, help="perturbed restarts for error estimates"
+    )
     p_inv.add_argument("--fix-pole", action="store_true", help="hold the pole fixed")
     p_inv.add_argument("--fix-period", action="store_true", help="hold the period fixed")
     p_inv.add_argument("--no-shape", action="store_true", help="skip Minkowski reconstruction")

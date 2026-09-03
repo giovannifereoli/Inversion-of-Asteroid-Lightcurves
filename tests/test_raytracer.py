@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lcinv import LommelSeeligerLambert, Polyhedron, RayTracer, ellipsoid, paper_shape, sphere
+from lcinv import LommelSeeligerLambert, RayTracer, ellipsoid, paper_shape, sphere
 from lcinv.raytracer import hexagonal_facet_samples
 
 LAW = LommelSeeligerLambert(1.0)

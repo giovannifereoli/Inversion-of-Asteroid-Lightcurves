@@ -182,22 +182,22 @@ class Polyhedron:
     # ------------------------------------------------------------------
     # transforms
     # ------------------------------------------------------------------
-    def _replace(self, vertices: np.ndarray) -> "Polyhedron":
+    def _replace(self, vertices: np.ndarray) -> Polyhedron:
         return Polyhedron(vertices, self._facets, self._albedo, validate=False)
 
-    def translated(self, shift: np.ndarray) -> "Polyhedron":
+    def translated(self, shift: np.ndarray) -> Polyhedron:
         """Copy translated by ``shift``."""
         return self._replace(self._vertices + np.asarray(shift, dtype=float))
 
-    def scaled(self, factor: float) -> "Polyhedron":
+    def scaled(self, factor: float) -> Polyhedron:
         """Copy scaled about the origin by ``factor``."""
         return self._replace(self._vertices * float(factor))
 
-    def rotated(self, matrix: np.ndarray) -> "Polyhedron":
+    def rotated(self, matrix: np.ndarray) -> Polyhedron:
         """Copy rotated by the ``3x3`` ``matrix``."""
         return self._replace(self._vertices @ np.asarray(matrix, dtype=float).T)
 
-    def centered(self) -> "Polyhedron":
+    def centered(self) -> Polyhedron:
         """Copy with the centre of mass at the origin.
 
         Appendix C notes that "it is useful to shift the centroid of the
@@ -205,27 +205,27 @@ class Polyhedron:
         """
         return self.translated(-self.centroid)
 
-    def to_unit_volume(self) -> "Polyhedron":
+    def to_unit_volume(self) -> Polyhedron:
         """Copy scaled to unit volume - DAMIT's uncalibrated convention."""
         v = abs(self.volume)
         if v <= 0:  # pragma: no cover - degenerate body
             raise ValueError("cannot normalise a body of zero volume")
         return self.scaled(v ** (-1.0 / 3.0))
 
-    def flipped(self) -> "Polyhedron":
+    def flipped(self) -> Polyhedron:
         """Copy with every facet's winding reversed."""
         return Polyhedron(
             self._vertices, self._facets[:, ::-1], self._albedo, validate=False
         )
 
-    def oriented_outward(self) -> "Polyhedron":
+    def oriented_outward(self) -> Polyhedron:
         """Copy whose facets wind counter-clockwise seen from outside."""
         return self.flipped() if self.volume < 0 else self
 
     # ------------------------------------------------------------------
     # derived quantities
     # ------------------------------------------------------------------
-    def convex_hull(self, method: str = "auto") -> "Polyhedron":
+    def convex_hull(self, method: str = "auto") -> Polyhedron:
         """The convex hull, as a :class:`Polyhedron`.
 
         Section 2: "For each nonconvex shape we also computed the
@@ -302,7 +302,7 @@ class Polyhedron:
     # I/O
     # ------------------------------------------------------------------
     @classmethod
-    def from_shape_txt(cls, path: str | Path) -> "Polyhedron":
+    def from_shape_txt(cls, path: str | Path) -> Polyhedron:
         """Read a DAMIT ``shape.txt`` file (1-based facet indices)."""
         values = Path(path).read_text().split()
         n_v, n_f = int(values[0]), int(values[1])
@@ -318,7 +318,7 @@ class Polyhedron:
         Path(path).write_text("\n".join(lines) + "\n")
 
     @classmethod
-    def from_obj(cls, path: str | Path) -> "Polyhedron":
+    def from_obj(cls, path: str | Path) -> Polyhedron:
         """Read a Wavefront ``.obj`` file, triangulating any polygon faces."""
         verts: list[list[float]] = []
         faces: list[tuple[int, int, int]] = []

@@ -95,7 +95,7 @@ def plot_shape_views(
 
     span = float(np.abs(body.vertices).max()) * 1.08
     base = np.array(plt.matplotlib.colors.to_rgb(colour))
-    for ax, view, label in zip(np.atleast_1d(axes), _VIEWS, _VIEW_LABELS):
+    for ax, view, label in zip(np.atleast_1d(axes), _VIEWS, _VIEW_LABELS, strict=True):
         polys, lit = _shade(body, view, sun)
         shades = base[None, :] * (0.25 + 0.75 * lit)[:, None]
         ax.add_collection(
@@ -117,8 +117,8 @@ def plot_shape_views(
 
 
 def plot_lightcurve_comparison(
-    bodies: "dict[str, Polyhedron]",
-    geometries: "list[tuple[np.ndarray, np.ndarray]]",
+    bodies: dict[str, Polyhedron],
+    geometries: list[tuple[np.ndarray, np.ndarray]],
     law=None,
     n_points: int = 120,
     axes=None,
@@ -188,7 +188,7 @@ def plot_lightcurve_comparison(
                 scales[name] = optimal_scale(ref_all, np.concatenate(curves[name]))
 
     for k, ax in enumerate(axes):
-        for (name, style) in zip(bodies, styles):
+        for name, style in zip(bodies, styles, strict=False):
             ax.plot(
                 phase / (2 * np.pi), curves[name][k] * scales[name],
                 style, lw=1.6, label=name,
@@ -203,7 +203,7 @@ def plot_lightcurve_comparison(
 
 def plot_lightcurve_grid(
     data: LightcurveSet,
-    models: "list[np.ndarray] | None" = None,
+    models: list[np.ndarray] | None = None,
     max_curves: int = 12,
     n_cols: int = 4,
     normalise: bool = True,
@@ -239,7 +239,7 @@ def plot_lightcurve_grid(
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 2.5 * n_rows))
     axes = np.atleast_1d(axes).ravel()
 
-    for ax, i in zip(axes, index):
+    for ax, i in zip(axes, index, strict=False):
         curve = data[i]
         y = curve.normalised if normalise else curve.brightness
         t = curve.jd - curve.jd.min()
@@ -276,7 +276,7 @@ def plot_period_scan(periods: np.ndarray, chi2: np.ndarray, best: float | None =
     return fig
 
 
-def plot_pole_samples(lam: np.ndarray, beta: np.ndarray, truth: "tuple[float, float] | None" = None):
+def plot_pole_samples(lam: np.ndarray, beta: np.ndarray, truth: tuple[float, float] | None = None):
     """Posterior pole directions on an equal-area (Hammer) projection."""
     import matplotlib.pyplot as plt
 
@@ -296,7 +296,7 @@ def plot_pole_samples(lam: np.ndarray, beta: np.ndarray, truth: "tuple[float, fl
     return fig
 
 
-def plot_corner(result, parameters: "list[str] | None" = None, truths=None):
+def plot_corner(result, parameters: list[str] | None = None, truths=None):
     """Corner plot of selected posterior parameters.
 
     Parameters

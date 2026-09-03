@@ -11,5 +11,9 @@ venv/
 .coverage
 htmlcov/
 site/
+.ipynb_checkpoints/
+.DS_Store
+
+# Downloaded DAMIT data (regenerate with `lcinv fetch`)
 data/damit/
 outputs/

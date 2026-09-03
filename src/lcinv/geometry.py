@@ -165,7 +165,7 @@ class SpinState:
         """``[lambda, beta, period]`` - the free rotation parameters."""
         return np.array([self.lam, self.beta, self.period])
 
-    def with_parameters(self, values: np.ndarray) -> "SpinState":
+    def with_parameters(self, values: np.ndarray) -> SpinState:
         """Copy with ``[lambda, beta, period]`` replaced."""
         v = np.asarray(values, dtype=float)
         if v.size != 3:
