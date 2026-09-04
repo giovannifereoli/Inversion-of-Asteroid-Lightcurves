@@ -372,10 +372,16 @@ class BayesianInversion:
             has to expand or contract before it can mix, which can show up as a
             long integrated autocorrelation time.
 
-            Off by default: on the (269) Justitia problem it made no
-            measurable difference, because the fixed scatters already matched
-            the posterior widths to within a factor of two.  It is worth trying
-            when a chain mixes badly and the parameter scales are unknown.
+            Off by default, and whether it earns its keep depends on how far
+            apart the parameter scales are.  Sampling shape and pole alone on
+            (269) Justitia it made no measurable difference, because the fixed
+            scatters already matched the posterior widths to within a factor of
+            two.  Adding the period and the four scattering parameters - which
+            range from a slope of order one to a surge width of order 0.1, one
+            of them pressed against its own lower bound - it cut the worst
+            integrated autocorrelation time from 155 to 89 steps at no extra
+            cost, because that is the number setting how long the chain has to
+            be.
         """
         rng = np.random.default_rng(seed)
         coeffs = self._fwd.initial_coefficients(*axes)

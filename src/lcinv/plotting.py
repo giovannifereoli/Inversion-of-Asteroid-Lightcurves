@@ -388,7 +388,8 @@ def plot_pole_samples(lam: np.ndarray, beta: np.ndarray, truth: tuple[float, flo
     return fig
 
 
-def plot_corner(result, parameters: list[str] | None = None, truths=None):
+def plot_corner(result, parameters: list[str] | None = None, truths=None,
+                title_fmt: str = ".4f"):
     """Corner plot of selected posterior parameters.
 
     Parameters
@@ -400,6 +401,11 @@ def plot_corner(result, parameters: list[str] | None = None, truths=None):
         ones with a physical reading.
     truths:
         Reference values, aligned with ``parameters``.
+    title_fmt:
+        Format for the median and its interval above each histogram.  ``corner``
+        applies one format to every panel, so a set spanning very different
+        scales needs enough decimals for the narrowest: a sidereal period known
+        to ``1e-5`` h reads as ``+0.0000`` at the default four.
     """
     import corner
 
@@ -413,7 +419,7 @@ def plot_corner(result, parameters: list[str] | None = None, truths=None):
     cols = [result.labels.index(n) for n in parameters]
     return corner.corner(
         result.samples[:, cols], labels=parameters, truths=truths,
-        show_titles=True, title_fmt=".4f",
+        show_titles=True, title_fmt=title_fmt,
         title_kwargs={"fontsize": 9, "color": tok["text_primary"]},
         label_kwargs={"fontsize": 10, "color": tok["text_secondary"]},
         color=palette[0], truth_color=palette[1],
