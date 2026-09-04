@@ -32,6 +32,8 @@ __all__ = [
     "plot_pole_scan",
     "plot_phase_function",
     "plot_residuals",
+    "plot_regularisation_scan",
+    "plot_shape_row",
 ]
 
 _VIEW_LABELS = ("View from $+x$ (equator)", "View from $+y$ (equator)", "View from $+z$ (pole)")
@@ -622,5 +624,215 @@ def plot_residuals(data, models, bins: int = 40):
     axes[1].set_ylabel("Per-curve RMS")
     axes[1].set_title("Fit quality vs. observing geometry", color=_tokens()["text_primary"])
     axes[1].legend(loc="best")
+    fig.tight_layout()
+    return fig
+
+
+def _weight_axis(ax, weights: np.ndarray) -> None:
+    """Log weight axis ticked at the weights actually run, not at the decades."""
+    from matplotlib.ticker import FixedLocator, NullLocator, StrMethodFormatter
+
+    ax.set_xscale("log")
+    ax.xaxis.set_major_locator(FixedLocator(list(weights)))
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.xaxis.set_major_formatter(StrMethodFormatter("{x:g}"))
+    ax.set_xlabel(r"Regularisation weight $\gamma$")
+
+
+def plot_regularisation_scan(
+    weights,
+    chi2,
+    penalty,
+    nonconvexity,
+    baseline: float | None = None,
+    baseline_label: str = "Convex body, ray traced",
+    mode: str = "light",
+):
+    r"""What the convexity regulariser costs, and what it buys (Section 4).
+
+    Section 4 suppresses spurious concavities by penalising "the area 'sunk
+    below' the convex hull of the current result".  Turning that weight up
+    walks the solution back towards convexity, and the honest test of whether
+    the concavities were earning their keep is to watch :math:`\chi^2` while it
+    happens - hence two panels against the same weight axis:
+
+    * the fit quality, against Paper II's bar ("at least as good a
+      :math:`\chi^2` as that of the convex model"), drawn as ``baseline`` with
+      the region that clears it shaded;
+    * how much concavity survives, as a fraction of the unregularised
+      solution's.  The sunk area and the volume deficit are quantities of
+      different scale, so they are indexed to a common base rather than given
+      an axis each; the legend carries their absolute values.
+
+    ``weights`` may include the unregularised run.  Zero cannot sit on a
+    logarithmic axis and is the natural reference for the rest anyway, so it is
+    lifted out and drawn as a reference line.
+
+    Parameters
+    ----------
+    weights:
+        Regularisation weights, as passed to
+        :class:`~lcinv.nonconvex.NonconvexInversion`.
+    chi2, penalty:
+        :attr:`~lcinv.nonconvex.NonconvexResult.chi2` and
+        :attr:`~lcinv.nonconvex.NonconvexResult.convexity_penalty` per weight.
+    nonconvexity:
+        Volume deficit ``1 - V / V_hull`` per weight, as a fraction.
+    baseline:
+        The convex model's :math:`\chi^2` *through the same forward model* -
+        the ray-traced convex body, not the ``L = Ag`` value.
+    baseline_label:
+        Legend text for that line.
+    mode:
+        ``"light"`` or ``"dark"``.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    tok = _tokens(mode)
+    palette = series_colors(mode)
+    w, chi2, penalty, nonconvexity = (
+        np.asarray(a, dtype=float)
+        for a in (weights, chi2, penalty, nonconvexity)
+    )
+    order = np.argsort(w)
+    w, chi2, penalty, nonconvexity = (a[order] for a in (w, chi2, penalty, nonconvexity))
+
+    keep = w > 0.0
+    if not keep.any():
+        raise ValueError("need at least one positive regularisation weight to plot")
+    # The reference the other runs are read against: the unregularised solution
+    # when it is in the scan, otherwise the weakest regularisation in it.
+    free = int(np.argmin(w))
+    unregularised = w[free] <= 0.0
+    ref_label = r"$\gamma = 0$" if unregularised else rf"$\gamma = {w[free]:g}$"
+
+    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.1))
+
+    # --- what it costs -----------------------------------------------------
+    ax = axes[0]
+    values = [chi2.min(), chi2.max()] + ([baseline] if baseline is not None else [])
+    lo, hi = float(min(values)), float(max(values))
+    pad = 0.08 * (hi - lo) if hi > lo else 0.1 * abs(hi) + 1e-3
+    ax.set_ylim(lo - pad, hi + pad)
+    if baseline is not None:
+        # Paper II's reliability condition is an inequality, so show it as a
+        # region rather than leaving the reader to work out which side is which.
+        ax.axhspan(lo - pad, baseline, color=palette[2], alpha=0.14, lw=0, zorder=1)
+        ax.axhline(baseline, color=palette[2], lw=1.4, ls=(0, (5, 2)), zorder=3,
+                   label=f"{baseline_label} ({baseline:.4f})")
+        # Low in the band, clear of the unregularised line that runs through it.
+        ax.text(0.985, (lo - pad) + 0.2 * (baseline - lo + pad),
+                "at least as good as convex", transform=ax.get_yaxis_transform(),
+                ha="right", va="center", fontsize=8.5, color=tok["text_secondary"],
+                zorder=5, bbox={"facecolor": tok["surface"], "edgecolor": "none",
+                                "pad": 1.5, "alpha": 0.85})
+    if unregularised:
+        ax.axhline(chi2[free], color=tok["text_muted"], lw=1.0, ls=(0, (1, 1.8)),
+                   zorder=2, label=rf"Unregularised ({chi2[free]:.4f})")
+    ax.plot(w[keep], chi2[keep], "-o", color=palette[0], ms=5.5,
+            mec=tok["surface"], mew=0.8, zorder=4, label="Nonconvex fit")
+    _weight_axis(ax, w[keep])
+    ax.set_ylabel(r"$\chi^2$")
+    ax.set_title("What it costs", color=tok["text_primary"])
+    ax.legend(loc="upper left")
+
+    # --- what it buys ------------------------------------------------------
+    ax = axes[1]
+    for series, colour, marker, label in (
+        (penalty, palette[0], "o",
+         f"Area sunk below the hull ({penalty[free]:.3f} at {ref_label})"),
+        (nonconvexity, palette[1], "s",
+         f"Volume deficit ({nonconvexity[free]:.1%} at {ref_label})"),
+    ):
+        scale = series[free] if series[free] > 0 else 1.0
+        ax.plot(w[keep], series[keep] / scale, "-", marker=marker, color=colour,
+                ms=5.5, mec=tok["surface"], mew=0.8, zorder=4, label=label)
+    _weight_axis(ax, w[keep])
+    ax.set_yscale("log")
+    ax.set_ylabel(f"Fraction of the {ref_label} value")
+    ax.set_title("What it buys", color=tok["text_primary"])
+    ax.legend(loc="lower left")
+
+    fig.suptitle("Convexity regularisation (Paper I, Section 4)",
+                 color=tok["text_primary"])
+    fig.tight_layout()
+    return fig
+
+
+def plot_shape_row(
+    bodies: list[Polyhedron],
+    labels: list[str] | None = None,
+    view: np.ndarray | None = None,
+    title: str = "",
+    colour: str | None = None,
+    sun: np.ndarray | None = None,
+    mode: str = "light",
+):
+    """One orthographic view of each of several bodies, side by side.
+
+    For sequences where the shapes are the comparison - a regularisation scan,
+    a set of restarts - rather than one body seen from three directions, which
+    is :func:`plot_shape_views`.  All panels share one scale, so a body that
+    shrinks or flattens across the row reads as such.
+
+    Parameters
+    ----------
+    bodies:
+        The polyhedra, in the order they should appear.  Scale them the same
+        way first (``to_unit_volume``) unless size *is* the comparison.
+    labels:
+        Panel titles.
+    view:
+        View direction, ``+y`` (equatorial) by default.
+    title:
+        Figure title.
+    colour:
+        Base facet colour.
+    sun:
+        Illumination direction; the view direction when omitted.
+    mode:
+        ``"light"`` or ``"dark"``.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PolyCollection
+
+    if not bodies:
+        raise ValueError("nothing to draw")
+    tok = _tokens(mode)
+    colour = colour or tok["body"]
+    view = _VIEWS[1] if view is None else np.asarray(view, dtype=float)
+    labels = list(labels) if labels is not None else [""] * len(bodies)
+
+    fig, axes = plt.subplots(1, len(bodies), figsize=(2.3 * len(bodies) + 0.6, 2.7))
+    span = max(float(np.abs(b.vertices).max()) for b in bodies) * 1.08
+    base = np.array(plt.matplotlib.colors.to_rgb(colour))
+    for ax, body, label in zip(np.atleast_1d(axes), bodies, labels, strict=True):
+        polys, lit = _shade(body, view, sun)
+        shades = base[None, :] * (0.25 + 0.75 * lit)[:, None]
+        ax.add_collection(
+            PolyCollection(
+                polys, facecolors=shades, edgecolors=shades,
+                linewidths=0.5, antialiaseds=True,
+            )
+        )
+        ax.set_xlim(-span, span)
+        ax.set_ylim(-span, span)
+        ax.set_aspect("equal")
+        ax.set_title(label, fontsize=9.5, color=tok["text_secondary"])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.grid(False)
+        for side in ax.spines.values():
+            side.set_visible(False)
+    if title:
+        fig.suptitle(title, color=tok["text_primary"])
     fig.tight_layout()
     return fig
