@@ -187,25 +187,64 @@ class BayesianInversion:
         self.convexity_sigma = convexity_sigma
         self.n_data = data.n_points
 
-        self._n_coef = self._fwd.n_coefficients
-        self._degrees = np.array(
-            [l for l in range(self.lmax + 1) for _ in range(-l, l + 1)]
-        )
+        degrees = np.array([l for l in range(self.lmax + 1) for _ in range(-l, l + 1)])
+        # Under Eq. (13) the constant term is a pure scale factor, so the
+        # forward model overwrites it with a fixed value (Section 3.4).  An
+        # optimiser can carry such a column harmlessly - its Jacobian entry is
+        # zero and it never moves - but a sampler cannot: with no likelihood and
+        # no prior the direction is improper, the ensemble diffuses along it
+        # without bound, and because the differential-evolution moves scale
+        # their proposals by the ensemble's own spread, that runaway degrades
+        # the mixing of every other parameter.  So it is left out of the
+        # sampled vector entirely and reinserted before each forward call.
+        self._skip_a00 = bool(self._fwd.fix_scale)
+        self._degrees = degrees[1:] if self._skip_a00 else degrees
+        self._n_coef = len(self._degrees)
         # Fix the scale term now so the posterior can be evaluated before run().
         self._fwd._fixed_a00 = float(self._fwd.initial_coefficients(1.3, 1.0, 0.9)[0])
+
+    def _forward_params(self, theta: np.ndarray) -> np.ndarray:
+        """The forward model's parameter vector for a sample ``theta``.
+
+        ``theta`` carries no ``log_sigma`` tail and, when the scale term is
+        fixed, no ``a[0,0]``; :class:`~lcinv.convex.HarmonicInversion` expects
+        both slots present, so put the placeholder back.
+        """
+        params = np.asarray(theta, dtype=float)[:-1]
+        if self._skip_a00:
+            params = np.concatenate([[self._fwd._fixed_a00], params])
+        return params
 
     # ------------------------------------------------------------------
     @property
     def labels(self) -> list[str]:
         """Names of the sampled parameters, in order."""
         names = [f"a[{l},{m}]" for l in range(self.lmax + 1) for m in range(-l, l + 1)]
+        if self._skip_a00:
+            names = names[1:]
         if self.fit_pole:
             names += ["lambda", "beta"]
         if self.fit_period:
             names += ["period"]
         if self.fit_scattering:
-            names += [f"law{i}" for i in range(len(np.atleast_1d(self._fwd.model.law.parameters)))]
+            names += list(self._law_names)
         return names + ["log_sigma"]
+
+    @property
+    def _law_mask(self) -> np.ndarray:
+        """Which scattering parameters the forward model actually varies.
+
+        :class:`~lcinv.convex.HarmonicInversion` holds the unidentifiable ones
+        fixed (Eq. 13 cancels any pure scale factor), so the sampler must use
+        the same mask or its parameter vector will not line up with the one the
+        forward model unpacks.
+        """
+        return np.asarray(self._fwd.model.law.free_parameter_mask, dtype=bool)
+
+    @property
+    def _law_names(self) -> list[str]:
+        """Names of the sampled scattering parameters, in order."""
+        return [f"law{i}" for i in np.flatnonzero(self._law_mask)]
 
     @property
     def n_dim(self) -> int:
@@ -230,8 +269,9 @@ class BayesianInversion:
         if not -12.0 < log_sigma < 2.0:
             return -np.inf
 
-        # Weakly informative Gaussian on the shape coefficients; the constant
-        # term is a scale factor and is left flat.
+        # Weakly informative Gaussian on the shape coefficients.  A constant
+        # term still in the vector (absolute photometry) is a scale factor and
+        # is left flat; when the objective is relative it is not sampled at all.
         varying = coeffs[self._degrees > 0]
         lp = -0.5 * float(varying @ varying) / self.coefficient_scale**2
 
@@ -250,16 +290,26 @@ class BayesianInversion:
             if abs(period - self.spin.period) > self.period_window:
                 return -np.inf
         if self.fit_scattering:
-            n_law = len(np.atleast_1d(self._fwd.model.law.parameters))
+            mask = self._law_mask
+            n_law = int(mask.sum())
             law_par = theta[pos : pos + n_law]
             pos += n_law
             if np.any(~np.isfinite(law_par)):
+                return -np.inf
+            # Uniform inside the law's own physical limits, zero outside.  The
+            # optimiser gets these as box constraints; the sampler has to get
+            # them as a prior or its walkers will wander into negative surge
+            # widths and unphysical slopes that happen to fit slightly better.
+            lo, hi = self._fwd.model.law.parameter_bounds
+            if np.any(law_par < np.asarray(lo, float)[mask]) or np.any(
+                law_par > np.asarray(hi, float)[mask]
+            ):
                 return -np.inf
         return float(lp)
 
     def _residuals(self, theta: np.ndarray) -> np.ndarray | None:
         try:
-            return self._fwd._residual_fn(theta[:-1])
+            return self._fwd._residual_fn(self._forward_params(theta))
         except (ValueError, FloatingPointError):  # pragma: no cover - bad proposal
             return None
 
@@ -273,7 +323,7 @@ class BayesianInversion:
         ll = -0.5 * float(res @ res) / sigma**2 - n * np.log(sigma) - 0.5 * n * np.log(2.0 * np.pi)
 
         if self.convexity_sigma is not None:
-            coeffs, _, _ = self._fwd._unpack(theta[:-1])
+            coeffs, _, _ = self._fwd._unpack(self._forward_params(theta))
             areas = self._fwd.areas_from_coefficients(coeffs)
             ratio = float(np.linalg.norm(areas @ self.geometry.normals) / max(areas.sum(), 1e-300))
             ll += -0.5 * (ratio / self.convexity_sigma) ** 2
@@ -330,13 +380,13 @@ class BayesianInversion:
         rng = np.random.default_rng(seed)
         coeffs = self._fwd.initial_coefficients(*axes)
         self._fwd._fixed_a00 = float(coeffs[0])
-        centre = [coeffs]
+        centre = [coeffs[1:] if self._skip_a00 else coeffs]
         if self.fit_pole:
             centre.append([self.spin.lam, self.spin.beta])
         if self.fit_period:
             centre.append([self.spin.period])
         if self.fit_scattering:
-            centre.append(np.atleast_1d(self._fwd.model.law.parameters))
+            centre.append(np.atleast_1d(self._fwd.model.law.parameters)[self._law_mask])
         centre.append([np.log(0.02)])
         p0 = np.concatenate([np.atleast_1d(np.asarray(c, dtype=float)) for c in centre])
         if start is not None:
@@ -354,11 +404,29 @@ class BayesianInversion:
             if self.fit_period:
                 scatter[pos] = 0.2 * self.period_window
                 pos += 1
+            if self.fit_scattering:
+                # A single absolute spread cannot suit c, a, d and k at once -
+                # d is O(0.1) with a hard floor just below it - so scale each by
+                # its own magnitude.
+                law0 = p0[pos : pos + int(self._law_mask.sum())]
+                scatter[pos : pos + len(law0)] = np.maximum(0.05 * np.abs(law0), 1e-3)
+                pos += len(law0)
             scatter[-1] = 0.05
         state = p0 + scatter * rng.standard_normal((n_walkers, len(p0)))
         if self.fit_pole:
             col = self._n_coef + 1
             state[:, col] = np.clip(state[:, col], -89.9, 89.9)
+        if self.fit_scattering:
+            # A walker started outside the law's bounds has zero prior and can
+            # never move, so the ensemble would start a member short.
+            col = self._n_coef + 2 * self.fit_pole + self.fit_period
+            n_law = int(self._law_mask.sum())
+            lo, hi = self._fwd.model.law.parameter_bounds
+            lo, hi = np.asarray(lo, float)[self._law_mask], np.asarray(hi, float)[self._law_mask]
+            span = np.where(np.isfinite(hi - lo), 1e-6 * (hi - lo), 1e-6)
+            state[:, col : col + n_law] = np.clip(
+                state[:, col : col + n_law], lo + span, hi - span
+            )
         return state
 
     def laplace_scatter(self, theta: np.ndarray, fraction: float = 0.5) -> np.ndarray | None:
@@ -385,9 +453,15 @@ class BayesianInversion:
             that callers can fall back to fixed scatters.
         """
         try:
-            params = np.asarray(theta, dtype=float)[:-1]
+            params = self._forward_params(theta)
             jac = self._fwd._jacobian_fn(params)
             res = self._fwd._residual_fn(params)
+            if self._skip_a00:
+                # That column is identically zero, so it would make J^T J
+                # singular in a way the pseudo-inverse reports as an infinite
+                # width for a parameter that is not even sampled.
+                jac = jac[:, 1:]
+                params = params[1:]
             dof = max(len(res) - len(params), 1)
             sigma2 = float(res @ res) / dof
             cov = sigma2 * np.linalg.pinv(jac.T @ jac, rcond=1e-12)
@@ -530,6 +604,8 @@ class BayesianInversion:
             ``(n_dim,)`` starting vector, including ``log_sigma``.
         """
         params = np.asarray(result.parameters, dtype=float)
+        if self._skip_a00 and len(params) == self.n_dim:
+            params = params[1:]
         if len(params) != self.n_dim - 1:
             raise ValueError(
                 f"result has {len(params)} parameters, expected {self.n_dim - 1}; "
@@ -541,12 +617,12 @@ class BayesianInversion:
 
     def areas_from_sample(self, theta: np.ndarray) -> np.ndarray:
         """Facet values ``g_j`` implied by one posterior sample."""
-        coeffs, _, _ = self._fwd._unpack(theta[:-1])
+        coeffs, _, _ = self._fwd._unpack(self._forward_params(theta))
         return self._fwd.areas_from_coefficients(coeffs)
 
     def spin_from_sample(self, theta: np.ndarray) -> SpinState:
         """The rotation state implied by one posterior sample."""
-        _, spin, _ = self._fwd._unpack(theta[:-1])
+        _, spin, _ = self._fwd._unpack(self._forward_params(theta))
         return spin
 
     def shape_from_sample(self, theta: np.ndarray, **kwargs) -> MinkowskiResult:

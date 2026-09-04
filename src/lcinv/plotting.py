@@ -30,6 +30,7 @@ __all__ = [
     "plot_corner",
     "plot_facet_values",
     "plot_pole_scan",
+    "plot_pole_neighbourhood",
     "plot_phase_function",
     "plot_residuals",
     "plot_regularisation_scan",
@@ -466,7 +467,8 @@ def plot_facet_values(geometry, areas: np.ndarray, title: str = "Curvature funct
     return fig
 
 
-def plot_pole_scan(scan, references=None, labels=None):
+def plot_pole_scan(scan, references=None, labels=None,
+                   title: str = "Pole-scan minima (Paper II, step 2)"):
     """Map the pole-scan minima on a Hammer projection, coloured by chi-squared.
 
     Step 2 of the Paper II recipe starts the fit from a grid of pole directions
@@ -484,6 +486,9 @@ def plot_pole_scan(scan, references=None, labels=None):
         Optional ``[(lambda, beta), ...]`` reference poles to mark.
     labels:
         Names for those references.
+    title:
+        Figure title.  The same figure serves step 8's restart minima, which
+        are the same kind of object arrived at from a different direction.
 
     Returns
     -------
@@ -526,9 +531,7 @@ def plot_pole_scan(scan, references=None, labels=None):
         ax.legend(loc="lower right")
     ax.grid(True, lw=0.6, color=_tokens()["grid"])
     ax.tick_params(labelsize=8, colors=_tokens()["text_muted"])
-    ax.set_title(
-        "Pole-scan minima (Paper II, step 2)", color=_tokens()["text_primary"], pad=16
-    )
+    ax.set_title(title, color=_tokens()["text_primary"], pad=16)
     fig.tight_layout()
     return fig
 
@@ -834,5 +837,151 @@ def plot_shape_row(
             side.set_visible(False)
     if title:
         fig.suptitle(title, color=tok["text_primary"])
+    fig.tight_layout()
+    return fig
+
+
+def _pole_vectors(lam: np.ndarray, beta: np.ndarray) -> np.ndarray:
+    """Unit vectors for ecliptic pole coordinates in degrees."""
+    b, l = np.radians(np.asarray(beta, float)), np.radians(np.asarray(lam, float))
+    return np.column_stack([np.cos(b) * np.cos(l), np.cos(b) * np.sin(l), np.sin(b)])
+
+
+def plot_pole_neighbourhood(
+    lam,
+    beta,
+    values=None,
+    centre: tuple[float, float] | None = None,
+    reference: tuple[float, float] | None = None,
+    cloud: tuple[np.ndarray, np.ndarray] | None = None,
+    value_label: str = r"$\chi^2 / \chi^2_{\mathrm{best}}$",
+    cloud_label: str = "Posterior samples",
+    title: str = "Pole solutions",
+    mode: str = "light",
+):
+    r"""Pole solutions as angular offsets on the tangent plane, in degrees.
+
+    :func:`plot_pole_samples` and :func:`plot_pole_scan` map the whole sky,
+    which is the right frame for a pole *scan* but the wrong one once every
+    solution agrees to a few degrees: they all land in one blob and the figure
+    shows nothing but its location.  This projects onto the tangent plane at
+    ``centre`` instead, so a few degrees of scatter fill the panel.
+
+    It also removes a trap.  Justitia's pole sits near
+    :math:`\beta = -77^\circ`, where the meridians converge and a spread of
+    :math:`24^\circ` in :math:`\lambda` is barely :math:`3^\circ` on the sky.
+    Quoting a longitude standard deviation there overstates the uncertainty by
+    a factor of four; the range rings here are true angular separations.
+
+    Parameters
+    ----------
+    lam, beta:
+        Ecliptic longitude and latitude of each solution, in degrees.
+    values:
+        Optional per-solution magnitude to colour by - ``chi2`` for a set of
+        restarts.  Drawn on a reversed ramp so the best are darkest.
+    centre:
+        ``(lambda, beta)`` tangent point; the mean direction of ``lam, beta``
+        when omitted.
+    reference:
+        Optional published pole to mark.
+    cloud:
+        Optional ``(lam, beta)`` arrays of a dense sample set, drawn faintly
+        behind the marks - pass a posterior here to see it against the
+        scatter of the restarts.
+    value_label:
+        Colourbar label.
+    cloud_label:
+        Legend label for ``cloud``.
+    title:
+        Figure title.
+    mode:
+        ``"light"`` or ``"dark"``.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    tok = _tokens(mode)
+    palette = series_colors(mode)
+    vec = _pole_vectors(lam, beta)
+    if centre is None:
+        mean = vec.mean(axis=0)
+        centre_vec = mean / np.linalg.norm(mean)
+    else:
+        centre_vec = _pole_vectors([centre[0]], [centre[1]])[0]
+
+    # A tangent-plane basis at the centre: east along increasing longitude,
+    # north completing the right-handed set.
+    pole_axis = np.array([0.0, 0.0, 1.0])
+    east = np.cross(pole_axis, centre_vec)
+    norm = np.linalg.norm(east)
+    east = np.array([1.0, 0.0, 0.0]) if norm < 1e-12 else east / norm
+    north = np.cross(centre_vec, east)
+
+    def project(v):
+        along = np.clip(v @ centre_vec, 1e-12, None)
+        return (np.degrees(np.arctan2(v @ east, along)),
+                np.degrees(np.arctan2(v @ north, along)))
+
+    x, y = project(vec)
+
+    fig, ax = plt.subplots(figsize=(6.4, 5.4))
+    reach = float(np.max(np.hypot(x, y))) if len(x) else 1.0
+    if cloud is not None:
+        cx, cy = project(_pole_vectors(*cloud))
+        reach = max(reach, float(np.max(np.hypot(cx, cy))))
+    reach = max(reach * 1.25, 1e-3)
+
+    # Range rings, so the angular scale is readable without the axes.  Snap the
+    # spacing to a round number - rings at 6.7 and 13.4 degrees are unreadable.
+    nice = np.array([0.05, 0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 30.0])
+    candidates = nice[nice >= reach / 4.0]
+    tick = float(candidates[0]) if len(candidates) else float(nice[-1])
+    for r in np.arange(tick, reach + tick, tick):
+        ax.add_patch(plt.Circle((0, 0), r, fill=False, lw=0.7,
+                                color=tok["grid"], zorder=1))
+        ax.annotate(f"{r:g}$^\\circ$", (r / np.sqrt(2), r / np.sqrt(2)),
+                    fontsize=8, color=tok["text_muted"], ha="left", va="bottom",
+                    zorder=1)
+
+    if cloud is not None:
+        ax.scatter(cx, cy, s=4, alpha=0.10, color=palette[0], edgecolors="none",
+                   zorder=2, label=cloud_label)
+    if values is None:
+        ax.scatter(x, y, s=70, color=palette[0], edgecolors=tok["surface"],
+                   linewidths=0.7, zorder=4)
+    else:
+        v = np.asarray(values, dtype=float)
+        order = np.argsort(-v)  # best drawn last, on top
+        sc = ax.scatter(
+            x[order], y[order], c=v[order] / v.min(), s=90,
+            cmap=sequential_cmap(mode, reverse=True), zorder=4,
+            edgecolors=tok["axis"], linewidths=0.6,
+            norm=plt.matplotlib.colors.LogNorm(),
+        )
+        bar = fig.colorbar(sc, ax=ax, pad=0.02, shrink=0.85)
+        bar.set_label(value_label, color=tok["text_secondary"])
+        bar.ax.tick_params(labelsize=8, colors=tok["text_muted"])
+        bar.outline.set_visible(False)
+    if reference is not None:
+        rx, ry = project(_pole_vectors([reference[0]], [reference[1]]))
+        ax.scatter(rx, ry, s=230, marker="*", color=palette[1],
+                   edgecolors=tok["surface"], linewidths=0.9, zorder=6,
+                   label="Reference")
+
+    ax.set_xlim(-reach, reach)
+    ax.set_ylim(-reach, reach)
+    ax.set_aspect("equal")
+    ax.set_xlabel("Offset east (degrees)")
+    ax.set_ylabel("Offset north (degrees)")
+    ax.grid(False)
+    if cloud is not None or reference is not None:
+        leg = ax.legend(loc="upper left", markerscale=1.4)
+        for handle in leg.legend_handles:
+            handle.set_alpha(1.0)
+    ax.set_title(title, color=tok["text_primary"])
     fig.tight_layout()
     return fig
