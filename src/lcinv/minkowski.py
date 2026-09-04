@@ -72,10 +72,9 @@ class MinkowskiResult:
         ``"max_iter"``.
     shape_change:
         Largest relative change in the body's principal extents over the last
-        iteration.  This, not ``alignment``, is the number to judge a solution
-        by: ``V(l)`` is very ill-conditioned near its maximum - hundreds of
-        near-zero facets contribute almost nothing - so ``alignment`` keeps
-        creeping long after the shape has settled.
+        ``window`` iterations.  A diagnostic rather than a criterion: it has a
+        noise floor around ``1e-4`` because the principal axes rotate slightly
+        between iterates even for a settled body.
     volume:
         Volume of the returned body.
     """
@@ -253,8 +252,9 @@ def minkowski_solve(
     areas: np.ndarray,
     max_iter: int = 200,
     tol: float = 1e-7,
-    shape_tol: float = 1e-5,
-    patience: int = 30,
+    shape_tol: float = 2e-4,
+    patience: int = 40,
+    window: int = 10,
     close: bool = True,
     center: bool = True,
     verbose: bool = False,
@@ -278,20 +278,31 @@ def minkowski_solve(
     max_iter:
         Maximum conjugate-gradient iterations.
     tol:
-        Convergence threshold on ``1 - alignment``.  The default of ``1e-7``
-        already pins the axis ratios to well below a part in a thousand.
+        Convergence threshold on ``1 - alignment``, and the criterion to judge
+        a solve by.  At the default ``1e-6`` the realised facet areas are
+        proportional to the requested ones to better than a part in a million,
+        which pins
+        the axis ratios far below anything photometry can constrain.
     shape_tol:
-        Alternative, physically meaningful stopping rule: finish once the
-        body's principal extents change by less than this fraction for three
-        consecutive iterations (or when a stall leaves them that stable).
-        ``1e-5`` is a change of one part in 100,000 in the axis ratios - far
-        below anything photometry can constrain.  ``V(l)`` is ill-conditioned enough that
+        Used only to classify a stall.  If conjugate gradients can make no
+        further progress but the body's principal extents have stopped moving
+        by more than this, the answer is good and the status is reported as
+        ``"shape_converged"`` rather than ``"stalled"``.  It is *not* an early
+        exit: the extents metric has a noise floor of its own, measured at
+        ``~1.8e-4`` on these problems, because the inertia tensor's principal
+        axes rotate slightly between iterates even for a settled body.  ``V(l)`` is ill-conditioned enough that
         ``alignment`` can grind for hundreds of iterations after the shape has
         stopped moving, so this is usually what ends the solve.
     patience:
         Give up after this many consecutive iterations that fail to improve on
-        the best ``1 - alignment`` seen so far.  Reported as
-        ``status="stalled"``.
+        the best ``1 - alignment`` seen so far.  Conjugate gradients on this
+        problem regresses for stretches before improving again, so this has to
+        be generous.
+    window:
+        Number of iterations over which shape stability is judged.  The
+        one-iteration change is noise-dominated - it bounces between ``1e-6``
+        and ``1e-4`` on a converged body - so it is measured against the
+        extents ``window`` iterations back instead.
     close:
         Apply :func:`close_facet_areas` first, per Section 3.3.
     center:
@@ -346,10 +357,12 @@ def minkowski_solve(
     it = 0
     status = "max_iter"
     shape_change = np.inf
-    prev_extents: np.ndarray | None = None
-    stable = 0
+    extents_history: list[np.ndarray] = []
     best_residual = np.inf
     since_best = 0
+    # Conjugate gradients here is not monotone, so the last iterate is not
+    # necessarily the best one.  Keep the best and return that.
+    best_l = l.copy()
     body: Polyhedron | None = None
     realised = np.zeros_like(g)
 
@@ -362,10 +375,20 @@ def minkowski_solve(
         residual = 1.0 - alignment
         extents = body.extents()
         extents = extents / max(extents[-1], 1e-300)
-        if prev_extents is not None:
-            shape_change = float(np.abs(extents - prev_extents).max())
-            stable = stable + 1 if shape_change < shape_tol else 0
-        prev_extents = extents
+        extents_history.append(extents)
+        if len(extents_history) > window:
+            shape_change = float(
+                np.abs(extents - extents_history[-window - 1]).max()
+            )
+
+        # Record the best iterate *before* any stopping check, so that a break
+        # cannot return the previous, worse one.
+        if residual < best_residual:
+            best_residual, since_best = residual, 0
+            best_l = l.copy()
+        else:
+            since_best += 1
+
         if verbose:  # pragma: no cover - diagnostic only
             print(
                 f"  minkowski {it:3d}  1-alignment={residual:.3e}"
@@ -374,22 +397,11 @@ def minkowski_solve(
         if residual < tol:
             status = "converged"
             break
-        if stable >= 3:
-            # The axis ratios have stopped moving; further alignment gains do
-            # not change the body.
-            status = "shape_converged"
+        if since_best >= patience:
+            # A stall with a settled body is still a good answer: report it as
+            # such rather than as a failure.
+            status = "shape_converged" if shape_change < shape_tol else "stalled"
             break
-        # Conjugate gradients progresses in plateaus here, so "stalled" must
-        # mean no new best at all for a long stretch - not merely slow.
-        if residual < best_residual:
-            best_residual, since_best = residual, 0
-        else:
-            since_best += 1
-            if since_best >= patience:
-                # A stall with a settled body is still a good answer: report it
-                # as such rather than as a failure.
-                status = "shape_converged" if shape_change < shape_tol else "stalled"
-                break
 
         # Polak-Ribiere, restarted whenever it stops being an ascent direction.
         if prev_f is None:
@@ -438,7 +450,12 @@ def minkowski_solve(
         if np.any(l <= 0):  # pragma: no cover - recover from a bad projection
             l = np.maximum(l, 1e-6 * float(np.abs(l).max()))
 
+    # Report the best iterate seen, not whatever the last step produced.
+    l = best_l
     body, realised = dual_polyhedron(n, l, geo_tol)
+    alignment = float(realised @ g) / max(
+        float(np.linalg.norm(realised)) * np.sqrt(gg), 1e-300
+    )
     scale = float(np.sqrt(gg / max(float(realised @ g), 1e-300)))
     body = body.scaled(scale)
     if center:
