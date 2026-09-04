@@ -163,11 +163,11 @@ code, and the API reference.
 
 Stated plainly, because they affect what the results mean:
 
-* **Hapke roughness is not implemented.** `lcinv.Hapke` covers the single-scattering
-  albedo, Henyey–Greenstein phase function, opposition surge and the Chandrasekhar
-  `H` approximation, but *not* the macroscopic-roughness correction (θ̄). DAMIT's
-  Justitia model uses θ̄ = 20°, so the notebook fits with the Lommel-Seeliger +
-  Lambert law both papers use instead of silently misapplying published parameters.
+* **Scattering parameters are only partly identifiable.** Eq. (13) renormalises each
+  lightcurve to mean unity, so any parameter that is a pure multiplicative scale
+  cancels exactly — Hapke's single-scattering albedo `w` is one. Each law declares a
+  `free_parameter_mask` and physical `parameter_bounds`, and `fit_scattering` honours
+  both; freeing `w` against relative photometry is not meaningful.
 * **Albedo separation recovers asymmetry, not a map.** This is the paper's own
   position — "albedo effects are in principle quantitatively inseparable from shape
   effects", and the recovered contrast is a lower bound that depends on the ratio of

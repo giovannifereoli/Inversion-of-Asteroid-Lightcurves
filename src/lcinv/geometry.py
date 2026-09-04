@@ -160,6 +160,22 @@ class SpinState:
             out = w @ fixed.T
         return out.reshape(np.shape(vec_ast))
 
+    def normalised(self) -> "SpinState":
+        """Copy with the pole wrapped into ``lambda in [0, 360)``, ``|beta| <= 90``.
+
+        A fit is smooth in ``(lambda, beta)`` past the poles - ``beta = -93``
+        is simply the direction ``beta = -87``, ``lambda + 180`` - so the
+        optimiser is allowed to wander there, but a reported pole should be
+        canonical.
+        """
+        lam, beta = float(self.lam), float(self.beta)
+        beta = (beta + 180.0) % 360.0 - 180.0     # into (-180, 180]
+        if beta > 90.0:
+            beta, lam = 180.0 - beta, lam + 180.0
+        elif beta < -90.0:
+            beta, lam = -180.0 - beta, lam + 180.0
+        return SpinState(lam % 360.0, beta, self.period, self.t0, self.phi0, self.yorp)
+
     @property
     def parameters(self) -> np.ndarray:
         """``[lambda, beta, period]`` - the free rotation parameters."""

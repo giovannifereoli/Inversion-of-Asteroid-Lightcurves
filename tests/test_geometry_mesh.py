@@ -202,3 +202,29 @@ class TestPolyhedron:
         body.albedo = 0.3
         assert body.albedo.shape == (body.n_facets,)
         assert np.all(body.albedo == 0.3)
+
+
+class TestPoleNormalisation:
+    """A fitted pole may wander past the poles; the reported one should not."""
+
+    @pytest.mark.parametrize(
+        "lam,beta",
+        [(58.47, -93.75), (73.0, -81.0), (200.0, 95.0), (400.0, -10.0), (10.0, -180.0)],
+    )
+    def test_preserves_the_direction(self, lam, beta):
+        raw = SpinState(lam, beta, 5.0)
+        assert np.allclose(raw.normalised().pole_vector(), raw.pole_vector(), atol=1e-12)
+
+    @pytest.mark.parametrize(
+        "lam,beta", [(58.47, -93.75), (200.0, 95.0), (400.0, -10.0), (-30.0, 100.0)]
+    )
+    def test_lands_in_the_canonical_range(self, lam, beta):
+        n = SpinState(lam, beta, 5.0).normalised()
+        assert 0.0 <= n.lam < 360.0
+        assert -90.0 <= n.beta <= 90.0
+
+    def test_leaves_a_canonical_pole_alone(self):
+        n = SpinState(73.0, -81.0, 5.0, 2450000.0, 12.0).normalised()
+        assert n.lam == pytest.approx(73.0)
+        assert n.beta == pytest.approx(-81.0)
+        assert n.t0 == 2450000.0 and n.phi0 == 12.0

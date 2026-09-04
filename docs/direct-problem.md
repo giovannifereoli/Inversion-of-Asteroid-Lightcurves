@@ -32,11 +32,30 @@ damit = LommelSeeligerLambert(0.1, PhaseFunction(0.5, 0.1, -0.5))    # real data
 Every law returns exactly zero where $\mu \le 0$ or $\mu_0 \le 0$ — the "of course"
 in the paper's remark that $A_{ij}$ vanishes there.
 
-!!! warning "Hapke roughness"
-    `lcinv.Hapke` implements the single-scattering albedo, Henyey–Greenstein phase
-    function, opposition surge and Chandrasekhar $H$ approximation, but **not** the
-    macroscopic-roughness correction $\bar\theta$. DAMIT models fitted with
-    non-zero roughness cannot be reproduced exactly with it.
+### Hapke macroscopic roughness
+
+`lcinv.Hapke` implements the single-scattering albedo, Henyey–Greenstein phase
+function, opposition surge, Chandrasekhar $H$ approximation **and** the
+macroscopic-roughness correction of Hapke (1984; 1993, ch. 12). The true cosines are
+replaced by the effective $\mu_e$, $\mu_{0e}$ of a surface carrying unresolved
+slopes of mean angle $\bar\theta$, and the result is multiplied by the shadowing
+function $S(i, e, \psi)$; the azimuth follows from
+$\cos\psi = (\cos\alpha - \mu\mu_0)/(\sin i \sin e)$.
+
+Setting $\bar\theta = 0$ reproduces the smooth law to machine precision. The
+correction darkens the surface, weakly near opposition and strongly at large phase
+angle — about 2% at $\alpha = 2^\circ$ but 46% at $\alpha = 60^\circ$ for
+$\bar\theta = 40^\circ$.
+
+This is a *sub-facet* model: it describes slopes below the resolution of the mesh,
+and is complementary to the resolved inter-facet shadowing that
+[`RayTracer`](direct-problem.md) computes.
+
+!!! note "Identifiability"
+    Under `Objective.RELATIVE` the albedo $w$ multiplies the whole law and cancels
+    in Eq. (13), so `Hapke.free_parameter_mask` holds it fixed. Every law also
+    declares `parameter_bounds`; without them a fit will return a negative
+    opposition surge, which is marginally better and physically meaningless.
 
 ## Triangulation
 

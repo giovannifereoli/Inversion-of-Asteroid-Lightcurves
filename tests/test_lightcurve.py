@@ -153,3 +153,53 @@ class TestOptimalScale:
             optimal_scale(np.ones(3), np.ones(4))
         with pytest.raises(ValueError):
             optimal_scale(np.ones(3), np.zeros(3))
+
+
+class TestPerCurveWeighting:
+    """Paper II weights sparse and dense photometry separately."""
+
+    @staticmethod
+    def _mixed_set():
+        rng = np.random.default_rng(0)
+
+        def curve(name, n, span_days, alpha_deg_span):
+            jd = 2450000.0 + np.linspace(0.0, span_days, n)
+            # Move the Sun in longitude to open up the phase angle span.
+            ang = np.radians(np.linspace(0.0, alpha_deg_span, n))
+            sun = np.column_stack([np.cos(ang), np.sin(ang), np.zeros(n)]) * 2.0
+            earth = np.tile([1.0, 0.0, 0.0], (n, 1))
+            flux = 1.0 + 0.1 * rng.standard_normal(n)
+            return Lightcurve(jd, np.abs(flux) + 0.5, sun, earth, name=name)
+
+        return LightcurveSet(
+            [curve("dense1", 40, 0.3, 0.0), curve("dense2", 30, 0.2, 0.0),
+             curve("sparse", 200, 900.0, 25.0)]
+        )
+
+    def test_default_weight_is_one(self):
+        assert all(c.weight == 1.0 for c in self._mixed_set())
+
+    def test_per_curve_mode_equalises_total_weight(self):
+        s = self._mixed_set().balance_weights(mode="per_curve")
+        totals = [c.weight * len(c) for c in s]
+        assert all(t == pytest.approx(1.0) for t in totals)
+
+    def test_sparse_mode_only_touches_the_sparse_curve(self):
+        s = self._mixed_set().balance_weights(mode="sparse")
+        by_name = {c.name: c.weight for c in s}
+        assert by_name["dense1"] == 1.0
+        assert by_name["dense2"] == 1.0
+        assert by_name["sparse"] == pytest.approx(1.0 / 200)
+
+    def test_none_mode_resets(self):
+        s = self._mixed_set().balance_weights(mode="per_curve").balance_weights(mode="none")
+        assert all(c.weight == 1.0 for c in s)
+
+    def test_rejects_an_unknown_mode(self):
+        with pytest.raises(ValueError, match="mode must be"):
+            self._mixed_set().balance_weights(mode="nonsense")
+
+    def test_weights_survive_copying_helpers(self):
+        s = self._mixed_set().balance_weights(mode="per_curve")
+        assert s[0].with_noise(0.01, seed=1).weight == pytest.approx(s[0].weight)
+        assert s[0].light_time_corrected().weight == pytest.approx(s[0].weight)

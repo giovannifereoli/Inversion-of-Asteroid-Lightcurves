@@ -282,8 +282,9 @@ class BayesianInversion:
         axes: tuple[float, float, float] = (1.3, 1.0, 0.9),
         start: np.ndarray | None = None,
         pole_scatter: float = 1.0,
+        laplace: bool = False,
     ) -> np.ndarray:
-        """A tight ball of walkers around a starting point.
+        """A ball of walkers around a starting point, scaled to the posterior.
 
         Parameters
         ----------
@@ -299,7 +300,19 @@ class BayesianInversion:
             solution to start the chain already converged, which is much more
             efficient than letting it find the mode.
         pole_scatter:
-            Initial spread of the pole coordinates, in degrees.
+            Initial spread of the pole coordinates, in degrees.  Ignored when
+            ``laplace`` is in use.
+        laplace:
+            Scale each parameter's initial spread by the Laplace (Gaussian)
+            approximation to its posterior width, from
+            :meth:`laplace_scatter`.  An ensemble started at the wrong scale
+            has to expand or contract before it can mix, which can show up as a
+            long integrated autocorrelation time.
+
+            Off by default: on the (269) Justitia problem it made no
+            measurable difference, because the fixed scatters already matched
+            the posterior widths to within a factor of two.  It is worth trying
+            when a chain mixes badly and the parameter scales are unknown.
         """
         rng = np.random.default_rng(seed)
         coeffs = self._fwd.initial_coefficients(*axes)
@@ -318,20 +331,51 @@ class BayesianInversion:
             if len(p0) != self.n_dim:
                 raise ValueError(f"start must have {self.n_dim} entries")
 
-        scatter = np.full(len(p0), 0.02)
-        pos = self._n_coef
-        if self.fit_pole:
-            scatter[pos : pos + 2] = pole_scatter
-            pos += 2
-        if self.fit_period:
-            scatter[pos] = 0.2 * self.period_window
-            pos += 1
-        scatter[-1] = 0.05
+        scatter = self.laplace_scatter(p0) if laplace else None
+        if scatter is None:
+            scatter = np.full(len(p0), 0.02)
+            pos = self._n_coef
+            if self.fit_pole:
+                scatter[pos : pos + 2] = pole_scatter
+                pos += 2
+            if self.fit_period:
+                scatter[pos] = 0.2 * self.period_window
+                pos += 1
+            scatter[-1] = 0.05
         state = p0 + scatter * rng.standard_normal((n_walkers, len(p0)))
         if self.fit_pole:
             col = self._n_coef + 1
             state[:, col] = np.clip(state[:, col], -89.9, 89.9)
         return state
+
+    def laplace_scatter(self, theta: np.ndarray, fraction: float = 0.5) -> np.ndarray | None:
+        """Per-parameter posterior widths from the Gaussian (Laplace) approximation.
+
+        At the optimum the covariance is ``sigma^2 (J^T J)^-1`` with ``J`` the
+        Jacobian of the residuals, which the deterministic inversion already
+        computes analytically.  Returns ``fraction`` of those standard
+        deviations, so the walkers start comfortably inside the posterior
+        rather than having to find its scale by random walk.
+
+        Returns ``None`` if the Jacobian is unusable, so callers can fall back
+        to fixed scatters.
+        """
+        try:
+            params = np.asarray(theta, dtype=float)[:-1]
+            jac = self._fwd._jacobian_fn(params)
+            res = self._fwd._residual_fn(params)
+            dof = max(len(res) - len(params), 1)
+            sigma2 = float(res @ res) / dof
+            cov = sigma2 * np.linalg.pinv(jac.T @ jac, rcond=1e-12)
+            sd = np.sqrt(np.clip(np.diag(cov), 0.0, np.inf))
+            if not np.all(np.isfinite(sd)) or np.all(sd == 0.0):
+                return None
+            # log_sigma has an analytic width for a Gaussian likelihood.
+            sd = np.concatenate([sd, [1.0 / np.sqrt(2.0 * len(res))]])
+            floor = 1e-8 * max(float(np.max(np.abs(theta))), 1.0)
+            return fraction * np.maximum(sd, floor)
+        except (np.linalg.LinAlgError, ValueError):  # pragma: no cover
+            return None
 
     def run(
         self,
@@ -344,6 +388,9 @@ class BayesianInversion:
         pool=None,
         start: np.ndarray | None = None,
         pole_scatter: float = 1.0,
+        laplace: bool = False,
+        target_tau: float = 0.0,
+        max_steps: int | None = None,
     ) -> BayesResult:
         """Sample the posterior.
 
@@ -385,7 +432,7 @@ class BayesianInversion:
             burn = n_steps // 2
 
         state = self.initial_state(
-            n_walkers, seed=seed, start=start, pole_scatter=pole_scatter
+            n_walkers, seed=seed, start=start, pole_scatter=pole_scatter, laplace=laplace
         )
         sampler = emcee.EnsembleSampler(
             n_walkers, n_dim, self.log_probability, pool=pool,
@@ -400,6 +447,26 @@ class BayesianInversion:
         )
         sampler.random_state = np.random.default_rng(seed).bit_generator.state
         sampler.run_mcmc(state, n_steps, progress=progress)
+
+        if target_tau > 0.0:
+            ceiling = max_steps if max_steps is not None else 20 * n_steps
+            while sampler.iteration < ceiling:
+                try:
+                    tau_now = float(np.max(sampler.get_autocorr_time(quiet=True)))
+                except Exception:  # pragma: no cover - very short chains
+                    break
+                if not np.isfinite(tau_now) or sampler.iteration >= target_tau * tau_now:
+                    break
+                extra = int(
+                    min(
+                        ceiling - sampler.iteration,
+                        max(n_steps // 2, target_tau * tau_now - sampler.iteration),
+                    )
+                )
+                if extra <= 0:
+                    break
+                sampler.run_mcmc(None, extra, progress=progress)
+            burn = sampler.iteration // 2
 
         try:
             tau = sampler.get_autocorr_time(quiet=True)

@@ -61,6 +61,13 @@ class Lightcurve:
         each lightcurve header line.
     name:
         Optional label carried through plots and reports.
+    weight:
+        Relative weight of this curve in the objective.  Eq. (13) sums over
+        *points*, so a sparse curve with hundreds of points spread over years
+        can dominate chi-squared while constraining the shape far less per
+        point than a dense night does.  Paper II's remedy is to weight sparse
+        and dense data separately; :meth:`LightcurveSet.balance_weights` sets
+        these automatically.
     meta:
         Free-form metadata (references, filter, observer, ...).
     """
@@ -71,6 +78,7 @@ class Lightcurve:
     earth: np.ndarray
     calibrated: bool = False
     name: str = ""
+    weight: float = 1.0
     meta: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -153,6 +161,7 @@ class Lightcurve:
             self.earth,
             self.calibrated,
             self.name,
+            self.weight,
             dict(self.meta, light_time_corrected=True),
         )
 
@@ -171,6 +180,7 @@ class Lightcurve:
             self.earth,
             self.calibrated,
             self.name,
+            self.weight,
             dict(self.meta, noise=level),
         )
 
@@ -291,6 +301,48 @@ class LightcurveSet:
             d[chosen] = -1.0
             chosen.append(int(np.argmax(d)))
         return LightcurveSet([self.curves[i] for i in sorted(chosen)])
+
+    @property
+    def weights(self) -> np.ndarray:
+        """``(M,)`` per-curve weights."""
+        return np.asarray([c.weight for c in self.curves], dtype=float)
+
+    def balance_weights(
+        self, sparse_alpha_span_deg: float = 2.0, mode: str = "per_curve"
+    ) -> "LightcurveSet":
+        """Set per-curve weights so that no one curve dominates chi-squared.
+
+        Parameters
+        ----------
+        sparse_alpha_span_deg:
+            A curve whose solar phase angle spans more than this is treated as
+            *sparse* (survey photometry spanning many apparitions) rather than
+            a dense single-night run.
+        mode:
+            ``"per_curve"`` gives every lightcurve the same total weight,
+            ``1 / n_points``, so each observing geometry counts once - the
+            spirit of Eq. (7)'s "democratization".  ``"sparse"`` leaves dense
+            curves at unit weight and down-weights only the sparse ones by
+            their point count.  ``"none"`` resets every weight to one.
+
+        Returns
+        -------
+        LightcurveSet
+            The same curves with :attr:`Lightcurve.weight` set.
+        """
+        if mode not in ("per_curve", "sparse", "none"):
+            raise ValueError("mode must be 'per_curve', 'sparse' or 'none'")
+        for curve in self.curves:
+            if mode == "none":
+                curve.weight = 1.0
+                continue
+            span = float(np.degrees(np.ptp(curve.phase_angles)))
+            sparse = span > sparse_alpha_span_deg
+            if mode == "per_curve" or sparse:
+                curve.weight = 1.0 / max(len(curve), 1)
+            else:
+                curve.weight = 1.0
+        return self
 
     def summary(self) -> dict:
         """Descriptive statistics, keyed for printing or logging."""

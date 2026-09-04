@@ -69,7 +69,14 @@ from .nonconvex import (
     RadialShapeSeries,
     convexity_penalty,
 )
-from .pipeline import InversionPipeline, PipelineResult, period_scan, pole_grid
+from .style import PALETTE, style_context, use_style
+from .pipeline import (
+    InversionPipeline,
+    PipelineResult,
+    period_sampling_interval,
+    period_scan,
+    pole_grid,
+)
 from .raytracer import RayTracer
 from .scattering import (
     Hapke,
@@ -145,6 +152,10 @@ __all__ = [
     "MinkowskiResult",
     "InversionPipeline",
     "PipelineResult",
+    "PALETTE",
+    "use_style",
+    "style_context",
+    "period_sampling_interval",
     "period_scan",
     "pole_grid",
 ]

@@ -79,6 +79,29 @@ class ScatteringLaw(ABC):
         """Free parameters as a flat array (empty when the law is fixed)."""
         return np.zeros(0)
 
+    @property
+    def free_parameter_mask(self) -> np.ndarray:
+        """Which of :attr:`parameters` are identifiable from lightcurve *shape*.
+
+        Eq. (13) renormalises every lightcurve to mean unity, so any parameter
+        that acts as a pure multiplicative scale cancels exactly and cannot be
+        recovered.  Fitting one anyway lets an optimiser wander along a flat
+        direction.  Laws that have such a parameter mark it ``False`` here, and
+        :class:`~lcinv.convex.HarmonicInversion` then holds it fixed.
+        """
+        return np.ones(len(np.atleast_1d(self.parameters)), dtype=bool)
+
+    @property
+    def parameter_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        """Physical ``(lower, upper)`` limits for :attr:`parameters`.
+
+        Without these an optimiser will happily return a negative opposition
+        surge or a negative surge width, which fit slightly better and mean
+        nothing.  Unbounded entries use ``-inf`` / ``+inf``.
+        """
+        n = len(np.atleast_1d(self.parameters))
+        return np.full(n, -np.inf), np.full(n, np.inf)
+
     def with_parameters(self, values: np.ndarray) -> ScatteringLaw:
         """Return a copy with :attr:`parameters` replaced by ``values``.
 
@@ -185,6 +208,15 @@ class LommelSeeligerLambert(ScatteringLaw):
             return np.array([self.lambert_weight])
         return np.concatenate([[self.lambert_weight], self.phase_function.parameters])
 
+    @property
+    def parameter_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        if self.phase_function is None:
+            return np.array([0.0]), np.array([np.inf])
+        #            c        a       d        k
+        lo = np.array([0.0,   0.0,   1e-3,   -10.0])
+        hi = np.array([np.inf, 10.0,  2.0,     0.0])
+        return lo, hi
+
     def with_parameters(self, values: np.ndarray) -> LommelSeeligerLambert:
         values = np.asarray(values, dtype=float)
         if self.phase_function is None:
@@ -201,26 +233,50 @@ class LommelSeeligerLambert(ScatteringLaw):
 
 @dataclass(frozen=True)
 class Hapke(ScatteringLaw):
-    """Hapke (1993) bidirectional reflectance, cast into the paper's ``S``.
+    """Hapke bidirectional reflectance, cast into the paper's ``S``.
 
     DAMIT's ``LSM = "H"`` models are parameterised this way.  The single
     scattering albedo ``w`` carries the albedo, so ``varpi`` should be left at
     ``1`` when this law is used.
 
     .. math::
-        S = \\mu \\frac{w}{4\\pi} \\frac{\\mu_0}{\\mu + \\mu_0}
-            \\left[ (1 + B(\\alpha)) p(\\alpha) + H(\\mu)H(\\mu_0) - 1 \\right]
+        S = \\mu\\, r(i, e, \\alpha), \\qquad
+        r = \\frac{w}{4\\pi}\\frac{\\mu_{0e}}{\\mu_{0e} + \\mu_e}
+            \\left[(1 + B(\\alpha))p(\\alpha) + H(\\mu_{0e})H(\\mu_e) - 1\\right]
+            S(i, e, \\psi)
 
     with a single Henyey-Greenstein phase function ``p``, the opposition surge
-    ``B(alpha) = B0 / (1 + tan(alpha/2)/h)`` and Hapke's rational
+    ``B(alpha) = B0 / (1 + tan(alpha/2)/h)``, and Hapke's rational
     approximation to the Chandrasekhar ``H`` function.
+
+    Parameters
+    ----------
+    w:
+        Single-particle scattering albedo (DAMIT ``lsm_p1``).
+    g:
+        Henyey-Greenstein asymmetry parameter (``lsm_p2``); negative is
+        backscattering.
+    b0:
+        Opposition-surge amplitude (``lsm_p3``).
+    h:
+        Opposition-surge width (``lsm_p4``).
+    roughness:
+        Mean slope angle ``theta_bar`` in **degrees** (``lsm_p5``).  Zero
+        disables the correction and recovers the smooth-surface law exactly.
 
     Notes
     -----
-    The macroscopic-roughness correction (Hapke's ``theta_bar``) is *not*
-    applied; :attr:`roughness` is carried only so that DAMIT parameter sets
-    round-trip.  Use :class:`LommelSeeligerLambert` for work that follows the
-    paper.
+    The macroscopic-roughness correction of Hapke (1984; 1993, chapter 12) is
+    applied: the true cosines are replaced by the effective ``mu_e`` and
+    ``mu_0e`` of a surface tilted by unresolved slopes, and the result is
+    multiplied by the shadowing function ``S(i, e, psi)``.  It needs the
+    azimuth ``psi`` between the planes of incidence and emergence, which
+    follows from ``mu``, ``mu0`` and the phase angle through
+    ``cos psi = (cos alpha - mu mu0) / (sin i sin e)``.
+
+    This is a *geometric* roughness model: it describes sub-facet slopes, not
+    the resolved shadowing that :class:`~lcinv.raytracer.RayTracer` computes
+    between facets.  The two are complementary and can be used together.
     """
 
     w: float = 0.3
@@ -232,26 +288,125 @@ class Hapke(ScatteringLaw):
     uses_phase_angle: ClassVar[bool] = True
 
     def _h_function(self, x: np.ndarray) -> np.ndarray:
-        gamma = np.sqrt(max(0.0, 1.0 - self.w))
+        gamma = np.sqrt(max(0.0, 1.0 - max(self.w, 0.0)))
         return (1.0 + 2.0 * x) / (1.0 + 2.0 * x * gamma)
+
+    def _roughness_correction(
+        self, mu: np.ndarray, mu0: np.ndarray, alpha: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Effective cosines and the shadowing function ``S(i, e, psi)``.
+
+        Returns ``(mu0e, mu_e, shadow)``.  Follows Hapke (1993) eqs. 12.45-12.54,
+        which split on whether the incidence or the emergence angle is larger.
+        """
+        theta = np.radians(self.roughness)
+        tan_t = np.tan(theta)
+        chi = 1.0 / np.sqrt(1.0 + np.pi * tan_t**2)
+        cot_t = 1.0 / tan_t
+
+        # Angles.  Clip away from the exact limb so cotangents stay finite.
+        eps = 1e-9
+        mu_c = np.clip(mu, eps, 1.0 - eps)
+        mu0_c = np.clip(mu0, eps, 1.0 - eps)
+        i = np.arccos(mu0_c)
+        e = np.arccos(mu_c)
+        sin_i, sin_e = np.sin(i), np.sin(e)
+
+        # Azimuth between the planes of incidence and emergence.
+        cos_psi = np.clip(
+            (np.cos(alpha) - mu_c * mu0_c) / np.maximum(sin_i * sin_e, eps), -1.0, 1.0
+        )
+        psi = np.arccos(cos_psi)
+        half = np.sin(psi / 2.0) ** 2
+
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            def e1(x):
+                return np.exp(-2.0 / np.pi * cot_t / np.maximum(np.tan(x), eps))
+
+            def e2(x):
+                return np.exp(-1.0 / np.pi * cot_t**2 / np.maximum(np.tan(x), eps) ** 2)
+
+            e1_i, e1_e = e1(i), e1(e)
+            e2_i, e2_e = e2(i), e2(e)
+
+            def eta(x, e1x, e2x):
+                return chi * (
+                    np.cos(x) + np.sin(x) * tan_t * e2x / np.maximum(2.0 - e1x, eps)
+                )
+
+            eta_i, eta_e = eta(i, e1_i, e2_i), eta(e, e1_e, e2_e)
+
+            # i <= e branch
+            den_a = np.maximum(2.0 - e1_e - (psi / np.pi) * e1_i, eps)
+            mu0e_a = chi * (
+                mu0_c + sin_i * tan_t * (cos_psi * e2_e + half * e2_i) / den_a
+            )
+            mue_a = chi * (mu_c + sin_e * tan_t * (e2_e - half * e2_i) / den_a)
+
+            # i > e branch
+            den_b = np.maximum(2.0 - e1_i - (psi / np.pi) * e1_e, eps)
+            mu0e_b = chi * (mu0_c + sin_i * tan_t * (e2_i - half * e2_e) / den_b)
+            mue_b = chi * (
+                mu_c + sin_e * tan_t * (cos_psi * e2_i + half * e2_e) / den_b
+            )
+
+            small_i = i <= e
+            mu0e = np.where(small_i, mu0e_a, mu0e_b)
+            mue = np.where(small_i, mue_a, mue_b)
+
+            f = np.exp(-2.0 * np.tan(np.clip(psi, 0.0, np.pi - eps) / 2.0))
+            ref = np.where(small_i, mu0_c / np.maximum(eta_i, eps),
+                           mu_c / np.maximum(eta_e, eps))
+            shadow = (
+                (mue / np.maximum(eta_e, eps))
+                * (mu0_c / np.maximum(eta_i, eps))
+                * chi
+                / np.maximum(1.0 - f + f * chi * ref, eps)
+            )
+
+        mu0e = np.nan_to_num(mu0e, nan=0.0, posinf=0.0, neginf=0.0)
+        mue = np.nan_to_num(mue, nan=0.0, posinf=0.0, neginf=0.0)
+        shadow = np.nan_to_num(shadow, nan=1.0, posinf=1.0, neginf=1.0)
+        return mu0e, mue, shadow
 
     def __call__(self, mu, mu0, alpha=None):
         if alpha is None:
             raise ValueError("the Hapke law needs the solar phase angle `alpha`")
         mu, mu0 = np.asarray(mu, dtype=float), np.asarray(mu0, dtype=float)
-        a = np.asarray(alpha, dtype=float)
+        a = np.broadcast_to(np.asarray(alpha, dtype=float), np.broadcast(mu, mu0).shape)
         ok = _visible(mu, mu0)
-        denom = np.where(ok, mu + mu0, 1.0)
+
+        if self.roughness > 0.0:
+            mu0e, mue, shadow = self._roughness_correction(mu, mu0, a)
+        else:
+            mu0e, mue, shadow = mu0, mu, 1.0
+
+        denom = np.where(ok, mue + mu0e, 1.0)
+        denom = np.where(np.abs(denom) < 1e-12, 1.0, denom)
 
         p = (1.0 - self.g**2) / np.power(1.0 + 2.0 * self.g * np.cos(a) + self.g**2, 1.5)
         surge = self.b0 / (1.0 + np.tan(np.clip(a, 0.0, np.pi - 1e-9) / 2.0) / self.h)
-        core = (1.0 + surge) * p + self._h_function(mu) * self._h_function(mu0) - 1.0
-        s = mu * (self.w / (4.0 * np.pi)) * (mu0 / denom) * core
+        core = (1.0 + surge) * p + self._h_function(mu0e) * self._h_function(mue) - 1.0
+        s = mu * (self.w / (4.0 * np.pi)) * (mu0e / denom) * core * shadow
         return np.where(ok, s, 0.0)
 
     @property
     def parameters(self) -> np.ndarray:
         return np.array([self.w, self.g, self.b0, self.h, self.roughness])
+
+    @property
+    def free_parameter_mask(self) -> np.ndarray:
+        # `w` multiplies the whole law and enters the shape only weakly, through
+        # H(x); under Eq. (13) it is effectively a scale factor, so it is held
+        # fixed.  Free it explicitly only when fitting absolute photometry.
+        return np.array([False, True, True, True, True])
+
+    @property
+    def parameter_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        #             w      g      B0     h     theta_bar (deg)
+        lo = np.array([1e-4, -0.999,  0.0, 1e-4,  0.0])
+        hi = np.array([1.0,    0.999, 5.0, 10.0, 60.0])
+        return lo, hi
 
     def with_parameters(self, values: np.ndarray) -> Hapke:
         v = np.asarray(values, dtype=float)

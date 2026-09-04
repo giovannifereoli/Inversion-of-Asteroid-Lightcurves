@@ -19,6 +19,7 @@ import numpy as np
 from .lightcurve import LightcurveSet
 from .mesh import Polyhedron
 from .scattering import LommelSeeligerLambert
+from .style import PALETTE, diverging_cmap, sequential_cmap, series_colors, use_style
 
 __all__ = [
     "plot_shape_views",
@@ -28,9 +29,17 @@ __all__ = [
     "plot_pole_samples",
     "plot_corner",
     "plot_facet_values",
+    "plot_pole_scan",
+    "plot_phase_function",
+    "plot_residuals",
 ]
 
-_VIEW_LABELS = ("+x (equator)", "+y (equator)", "+z (pole)")
+_VIEW_LABELS = ("View from $+x$ (equator)", "View from $+y$ (equator)", "View from $+z$ (pole)")
+
+
+def _tokens(mode: str = "light") -> dict:
+    """Apply the package style and return its colour tokens."""
+    return use_style(mode)
 _VIEWS = (np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0]))
 
 
@@ -61,8 +70,9 @@ def plot_shape_views(
     body: Polyhedron,
     axes=None,
     title: str = "",
-    colour: str = "#c9b8a0",
+    colour: str | None = None,
     sun: np.ndarray | None = None,
+    mode: str = "light",
 ):
     """Three orthographic views of a body, as DAMIT renders its models.
 
@@ -87,9 +97,11 @@ def plot_shape_views(
     import matplotlib.pyplot as plt
     from matplotlib.collections import PolyCollection
 
+    tok = _tokens(mode)
+    colour = colour or tok["body"]
     created = axes is None
     if created:
-        fig, axes = plt.subplots(1, 3, figsize=(11, 3.9))
+        fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.8))
     else:
         fig = np.atleast_1d(axes)[0].figure
 
@@ -98,19 +110,26 @@ def plot_shape_views(
     for ax, view, label in zip(np.atleast_1d(axes), _VIEWS, _VIEW_LABELS, strict=True):
         polys, lit = _shade(body, view, sun)
         shades = base[None, :] * (0.25 + 0.75 * lit)[:, None]
+        # Stroke each triangle in its own fill colour: with "none" the
+        # antialiased gaps between adjacent polygons let the background through
+        # and the body reads as a wireframe.
         ax.add_collection(
-            PolyCollection(polys, facecolors=shades, edgecolors="none", antialiaseds=True)
+            PolyCollection(
+                polys, facecolors=shades, edgecolors=shades,
+                linewidths=0.5, antialiaseds=True,
+            )
         )
         ax.set_xlim(-span, span)
         ax.set_ylim(-span, span)
         ax.set_aspect("equal")
-        ax.set_title(label, fontsize=9)
+        ax.set_title(label, fontsize=9.5, color=tok["text_secondary"])
         ax.set_xticks([])
         ax.set_yticks([])
+        ax.grid(False)
         for side in ax.spines.values():
             side.set_visible(False)
     if title:
-        fig.suptitle(title, fontsize=11)
+        fig.suptitle(title, color=tok["text_primary"])
     if created:
         fig.tight_layout()
     return fig
@@ -161,8 +180,10 @@ def plot_lightcurve_comparison(
         fig = np.atleast_1d(axes)[0].figure
     axes = np.atleast_1d(axes)
 
+    tok = _tokens()
     phase = np.linspace(0.0, 2.0 * np.pi, n_points)
-    styles = ["-", ":", "--", "-."]
+    styles = ["-", (0, (1, 1.6)), (0, (5, 2)), (0, (4, 1.5, 1, 1.5))]
+    palette = series_colors()
     tracers = {k: RayTracer(v) for k, v in bodies.items()}
 
     curves: dict[str, list[np.ndarray]] = {k: [] for k in bodies}
@@ -188,14 +209,14 @@ def plot_lightcurve_comparison(
                 scales[name] = optimal_scale(ref_all, np.concatenate(curves[name]))
 
     for k, ax in enumerate(axes):
-        for name, style in zip(bodies, styles, strict=False):
+        for j, (name, style) in enumerate(zip(bodies, styles, strict=False)):
             ax.plot(
                 phase / (2 * np.pi), curves[name][k] * scales[name],
-                style, lw=1.6, label=name,
+                ls=style, lw=2.0, color=palette[j], label=name,
             )
-        ax.set_xlabel("rotational phase")
-        ax.set_ylabel("brightness")
-        ax.legend(fontsize=8, frameon=False)
+        ax.set_xlabel("Rotational phase")
+        ax.set_ylabel("Brightness")
+        ax.legend(loc="best")
     if created:
         fig.tight_layout()
     return fig
@@ -236,42 +257,94 @@ def plot_lightcurve_grid(
         index = [int(i * step) for i in range(max_curves)]
 
     n_rows = int(np.ceil(len(index) / n_cols))
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.2 * n_cols, 2.5 * n_rows))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.0 * n_cols, 2.4 * n_rows))
     axes = np.atleast_1d(axes).ravel()
 
     for ax, i in zip(axes, index, strict=False):
         curve = data[i]
         y = curve.normalised if normalise else curve.brightness
         t = curve.jd - curve.jd.min()
-        ax.plot(t, y, "o", ms=2.6, color="#3b6ea5", label="observed")
+        ax.plot(t, y, "o", ms=3.4, color=series_colors()[0], mec=_tokens()["surface"],
+                mew=0.5, label="Observed", zorder=3)
         if models is not None:
-            ax.plot(t, models[i], "-", lw=1.4, color="#c2410c", label="model")
+            ax.plot(t, models[i], "-", lw=1.8, color=series_colors()[1],
+                    label="Model", zorder=4)
         ax.set_title(
-            f"{curve.name}  $\\alpha$={np.degrees(curve.mean_phase_angle):.0f}$^\\circ$",
-            fontsize=8,
+            rf"{curve.name}   $\alpha = {np.degrees(curve.mean_phase_angle):.0f}^\circ$",
+            fontsize=9, color=_tokens()["text_secondary"],
         )
-        ax.tick_params(labelsize=7)
+        ax.tick_params(labelsize=8)
     for ax in axes[len(index):]:
         ax.set_visible(False)
-    axes[0].legend(fontsize=7, frameon=False)
-    fig.supxlabel("JD - start of curve", fontsize=9)
-    fig.supylabel("relative brightness", fontsize=9)
+    axes[0].legend(loc="best", fontsize=8)
+    fig.supxlabel("Days from the start of each curve", color=_tokens()["text_secondary"])
+    fig.supylabel(r"Brightness $/\ \bar{L}$", color=_tokens()["text_secondary"])
     fig.tight_layout()
     return fig
 
 
-def plot_period_scan(periods: np.ndarray, chi2: np.ndarray, best: float | None = None):
-    """The ``chi^2(P)`` curve of step 1 of the Paper II recipe."""
+def plot_period_scan(
+    periods: np.ndarray,
+    chi2: np.ndarray,
+    best: float | None = None,
+    reference: float | None = None,
+    n_mark: int = 8,
+):
+    """``chi^2(P)`` - step 1 of the Paper II recipe.
+
+    Step 1 is to "determine the sampling interval of the period from the
+    separation between the local ``chi^2(P)`` minima".  Those minima are the
+    point of the figure, so the deepest few are marked directly rather than
+    left for the reader to hunt.
+
+    Parameters
+    ----------
+    periods, chi2:
+        The scan, as returned by :func:`lcinv.pipeline.period_scan`.
+    best:
+        Period to highlight; the global minimum when omitted.
+    reference:
+        A published period to mark for comparison.
+    n_mark:
+        How many of the deepest local minima to circle.
+    """
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(9, 3.4))
-    ax.plot(periods, chi2, "-", lw=0.9, color="#3b6ea5")
+    tok = _tokens()
+    periods = np.asarray(periods, dtype=float)
+    chi2 = np.asarray(chi2, dtype=float)
+    palette = series_colors()
+    if best is None and len(chi2):
+        best = float(periods[int(np.argmin(chi2))])
+
+    fig, ax = plt.subplots(figsize=(9.6, 4.0))
+    ax.plot(periods, chi2, "-", lw=1.0, color=palette[0], zorder=3)
+
+    # Local minima, deepest first.
+    if len(chi2) > 2:
+        interior = np.flatnonzero(
+            (chi2[1:-1] < chi2[:-2]) & (chi2[1:-1] < chi2[2:])
+        ) + 1
+        deepest = interior[np.argsort(chi2[interior])][:n_mark]
+        ax.plot(
+            periods[deepest], chi2[deepest], "o", ms=6.5, mfc="none",
+            mec=palette[1], mew=1.5, zorder=4, label=f"{len(deepest)} deepest minima",
+        )
+    if reference is not None:
+        ax.axvline(reference, color=palette[2], lw=1.6, ls=(0, (5, 2)), zorder=2,
+                   label=f"Published {reference:.6f} h")
     if best is not None:
-        ax.axvline(best, color="#c2410c", lw=1.2, ls="--", label=f"best {best:.6f} h")
-        ax.legend(fontsize=8, frameon=False)
-    ax.set_xlabel("period (hours)")
+        ax.axvline(best, color=palette[1], lw=1.6, ls=(0, (1, 1.6)), zorder=2,
+                   label=f"Best {best:.6f} h")
+    ax.set_xlabel("Sidereal period $P$ (hours)")
     ax.set_ylabel(r"$\chi^2$")
     ax.set_yscale("log")
+    ax.set_xlim(periods.min(), periods.max())
+    # Below the axes: a period scan fills its whole panel, so an in-axes legend
+    # sits on the data and one above it collides with the title.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.20), ncols=3,
+              borderaxespad=0.0)
+    ax.set_title("Period scan (Paper II, step 1)", color=tok["text_primary"])
     fig.tight_layout()
     return fig
 
@@ -280,18 +353,22 @@ def plot_pole_samples(lam: np.ndarray, beta: np.ndarray, truth: tuple[float, flo
     """Posterior pole directions on an equal-area (Hammer) projection."""
     import matplotlib.pyplot as plt
 
+    tok = _tokens()
+    palette = series_colors()
     x = np.radians(np.asarray(lam) % 360.0) - np.pi
     y = np.radians(np.asarray(beta))
-    fig, ax = plt.subplots(figsize=(7, 3.8), subplot_kw={"projection": "hammer"})
-    ax.scatter(x, y, s=3, alpha=0.25, color="#3b6ea5", edgecolors="none")
+    fig, ax = plt.subplots(figsize=(8.2, 4.3), subplot_kw={"projection": "hammer"})
+    ax.scatter(x, y, s=5, alpha=0.18, color=palette[0], edgecolors="none", zorder=3)
     if truth is not None:
         ax.scatter(
             [np.radians(truth[0] % 360.0) - np.pi], [np.radians(truth[1])],
-            s=90, marker="*", color="#c2410c", label="reference", zorder=5,
+            s=200, marker="*", color=palette[1], edgecolors=tok["surface"],
+            linewidths=0.8, label="Reference", zorder=5,
         )
-        ax.legend(fontsize=8, frameon=False, loc="lower right")
-    ax.grid(True, lw=0.3, alpha=0.5)
-    ax.set_title("spin-axis posterior (ecliptic)", fontsize=10)
+        ax.legend(loc="lower right")
+    ax.grid(True, lw=0.6, color=tok["grid"])
+    ax.tick_params(labelsize=8, colors=tok["text_muted"])
+    ax.set_title("Spin-axis posterior (ecliptic)", color=tok["text_primary"], pad=16)
     fig.tight_layout()
     return fig
 
@@ -316,15 +393,23 @@ def plot_corner(result, parameters: list[str] | None = None, truths=None):
             n for n in result.labels
             if not n.startswith("a[") or n == "a[0,0]"
         ]
+    tok = _tokens()
+    palette = series_colors()
     cols = [result.labels.index(n) for n in parameters]
     return corner.corner(
         result.samples[:, cols], labels=parameters, truths=truths,
-        show_titles=True, title_fmt=".4f", title_kwargs={"fontsize": 8},
-        label_kwargs={"fontsize": 9},
+        show_titles=True, title_fmt=".4f",
+        title_kwargs={"fontsize": 9, "color": tok["text_primary"]},
+        label_kwargs={"fontsize": 10, "color": tok["text_secondary"]},
+        color=palette[0], truth_color=palette[1],
+        hist_kwargs={"color": palette[0], "lw": 1.6},
+        plot_datapoints=False, fill_contours=True, smooth=0.9,
+        levels=(0.393, 0.865, 0.989),   # 1, 2, 3 sigma in 2-D
+        contour_kwargs={"linewidths": 1.0},
     )
 
 
-def plot_facet_values(geometry, areas: np.ndarray, title: str = "curvature function"):
+def plot_facet_values(geometry, areas: np.ndarray, title: str = "Curvature function"):
     """The solved ``g_j`` as a map over the Gaussian image sphere.
 
     This is the quantity the inversion actually determines; the shape follows
@@ -334,16 +419,156 @@ def plot_facet_values(geometry, areas: np.ndarray, title: str = "curvature funct
 
     from .geometry import unit_to_spherical
 
+    tok = _tokens()
     theta, phi = unit_to_spherical(geometry.normals)
     value = np.asarray(areas) / geometry.sphere_areas
-    fig, ax = plt.subplots(figsize=(7.5, 3.6))
+    fig, ax = plt.subplots(figsize=(8.6, 4.2), subplot_kw={"projection": "hammer"})
     sc = ax.scatter(
-        np.degrees(phi), np.degrees(np.pi / 2 - theta),
-        c=value, s=14, cmap="magma", edgecolors="none",
+        np.radians(np.degrees(phi) % 360.0) - np.pi, np.pi / 2 - theta,
+        c=value, s=26, cmap=sequential_cmap(), edgecolors="none", zorder=3,
     )
-    fig.colorbar(sc, ax=ax, label="$G$")
-    ax.set_xlabel("normal longitude (deg)")
-    ax.set_ylabel("normal latitude (deg)")
-    ax.set_title(title, fontsize=10)
+    bar = fig.colorbar(sc, ax=ax, pad=0.03, shrink=0.82)
+    bar.set_label(r"Curvature function $G$", color=tok["text_secondary"])
+    bar.ax.tick_params(labelsize=8, colors=tok["text_muted"])
+    bar.outline.set_visible(False)
+    ax.grid(True, lw=0.6, color=tok["grid"])
+    ax.tick_params(labelsize=8, colors=tok["text_muted"])
+    ax.set_title(title, color=tok["text_primary"], pad=16)
+    fig.tight_layout()
+    return fig
+
+
+def plot_pole_scan(scan, references=None, labels=None):
+    """Map the pole-scan minima on a Hammer projection, coloured by chi-squared.
+
+    Step 2 of the Paper II recipe starts the fit from a grid of pole directions
+    because the ``chi^2`` surface is multimodal.  This is the figure that shows
+    whether a "pole disagreement" is an error or a genuine degeneracy: a
+    lightcurve data set typically supports two solutions about
+    :math:`180^\\circ` apart in longitude, and if their ``chi^2`` differ by less
+    than the noise, neither is preferred.
+
+    Parameters
+    ----------
+    scan:
+        Sequence of ``(chi2, lambda_deg, beta_deg)`` from the fitted minima.
+    references:
+        Optional ``[(lambda, beta), ...]`` reference poles to mark.
+    labels:
+        Names for those references.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
+    import matplotlib.pyplot as plt
+
+    arr = np.asarray([(c, l, b) for c, l, b in scan], dtype=float)
+    chi2, lam, beta = arr[:, 0], arr[:, 1], arr[:, 2]
+    order = np.argsort(-chi2)  # draw the good ones last, on top
+    chi2, lam, beta = chi2[order], lam[order], beta[order]
+
+    fig, ax = plt.subplots(figsize=(9.0, 4.6), subplot_kw={"projection": "hammer"})
+    x = np.radians(lam % 360.0) - np.pi
+    y = np.radians(beta)
+    best = chi2.min()
+    sc = ax.scatter(
+        # Ramp reversed so the *best* minima are the darkest marks: the light
+        # end of a sequential ramp recedes into the surface, and here the small
+        # values are the ones the reader is looking for.
+        x, y, c=chi2 / best, s=95, cmap=sequential_cmap(reverse=True), zorder=3,
+        edgecolors=_tokens()["axis"], linewidths=0.6,
+        norm=plt.matplotlib.colors.LogNorm(),
+    )
+    bar = fig.colorbar(sc, ax=ax, pad=0.03, shrink=0.82)
+    bar.set_label(r"$\chi^2 / \chi^2_{\mathrm{best}}$",
+                  color=_tokens()["text_secondary"])
+    bar.ax.tick_params(labelsize=8, colors=_tokens()["text_muted"])
+    bar.outline.set_visible(False)
+
+    markers = ["*", "P", "X", "D"]
+    for i, ref in enumerate(references or []):
+        name = (labels or [None] * len(references))[i] or f"reference {i + 1}"
+        ax.scatter(
+            [np.radians(ref[0] % 360.0) - np.pi], [np.radians(ref[1])],
+            s=230, marker=markers[i % len(markers)], color=series_colors()[1],
+            edgecolors=_tokens()["surface"], linewidths=0.9, zorder=6, label=name,
+        )
+    if references:
+        ax.legend(loc="lower right")
+    ax.grid(True, lw=0.6, color=_tokens()["grid"])
+    ax.tick_params(labelsize=8, colors=_tokens()["text_muted"])
+    ax.set_title(
+        "Pole-scan minima (Paper II, step 2)", color=_tokens()["text_primary"], pad=16
+    )
+    fig.tight_layout()
+    return fig
+
+
+def plot_phase_function(laws, labels, alpha_max_deg=25.0):
+    """Compare solar phase functions ``f(alpha)`` over the observed range.
+
+    Fitting ``a``, ``d`` and ``k`` rather than fixing them is what Paper II's
+    step 3 adds; this shows how far the fitted function moves from the
+    defaults, and therefore how much of the shape solution was being absorbed
+    by the scattering model.
+    """
+    import matplotlib.pyplot as plt
+
+    alpha = np.linspace(0.0, np.radians(alpha_max_deg), 300)
+    fig, ax = plt.subplots(figsize=(6.4, 3.6))
+    for law, name in zip(laws, labels, strict=True):
+        pf = getattr(law, "phase_function", None)
+        if pf is None:
+            continue
+        ax.plot(np.degrees(alpha), pf(alpha), lw=1.8, label=name)
+    ax.set_xlabel(r"Solar phase angle $\alpha$ (degrees)")
+    ax.set_ylabel(r"$f(\alpha)$")
+    ax.set_title("Empirical solar phase function", color=_tokens()["text_primary"])
+    ax.legend(fontsize=8, frameon=False)
+    ax.grid(True, lw=0.3, alpha=0.4)
+    fig.tight_layout()
+    return fig
+
+
+def plot_residuals(data, models, bins: int = 40):
+    """Residual distribution and per-curve scatter against phase angle.
+
+    The left panel checks that the residuals are noise-like; the right one
+    checks Section 3.5's concern about observing geometry, by showing whether
+    the fit degrades systematically at the phase angles that carry the shape
+    information.
+    """
+    import matplotlib.pyplot as plt
+
+    per_curve, alphas, counts = [], [], []
+    pooled = []
+    for i, curve in enumerate(data):
+        res = np.asarray(models[i]) - curve.normalised
+        pooled.append(res)
+        per_curve.append(float(np.sqrt(np.mean(res**2))))
+        alphas.append(np.degrees(curve.mean_phase_angle))
+        counts.append(len(curve))
+    pooled = np.concatenate(pooled)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10.8, 3.8))
+    axes[0].hist(pooled, bins=bins, color=series_colors()[0],
+                 edgecolor=_tokens()["surface"], linewidth=0.6, zorder=3)
+    axes[0].axvline(0.0, color=_tokens()["text_muted"], lw=1.0, zorder=4)
+    axes[0].set_xlabel("Residual (relative intensity)")
+    axes[0].set_ylabel("Number of points")
+    axes[0].set_title(rf"Pooled residuals, RMS $= {np.sqrt(np.mean(pooled**2)):.4f}$",
+                      color=_tokens()["text_primary"])
+
+    sizes = 18.0 + 90.0 * np.asarray(counts) / max(counts)
+    axes[1].axhline(float(np.median(per_curve)), color=_tokens()["text_muted"],
+                    lw=1.0, ls=(0, (5, 2)), zorder=2,
+                    label=f"Median {np.median(per_curve):.4f}")
+    axes[1].scatter(alphas, per_curve, s=sizes, alpha=0.85, color=series_colors()[1],
+                    edgecolors=_tokens()["surface"], linewidths=0.7, zorder=3)
+    axes[1].set_xlabel(r"Mean solar phase angle $\alpha$ (degrees)")
+    axes[1].set_ylabel("Per-curve RMS")
+    axes[1].set_title("Fit quality vs. observing geometry", color=_tokens()["text_primary"])
+    axes[1].legend(loc="best")
     fig.tight_layout()
     return fig

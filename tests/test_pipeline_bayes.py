@@ -7,6 +7,7 @@ import pytest
 
 from conftest import synthetic_set
 from lcinv import (
+    BayesianInversion,
     FacetGeometry,
     InversionPipeline,
     LommelSeeligerLambert,
@@ -156,3 +157,41 @@ class TestBayesianInversion:
         inv = BayesianInversion(data, FacetGeometry.from_sphere(4), spin, lmax=1, law=law)
         with pytest.raises(ValueError):
             inv.run(n_walkers=4, n_steps=10)
+
+
+class TestChainLengthControl:
+    """`target_tau` automates emcee's own 50-tau advice."""
+
+    @staticmethod
+    def _tiny_inversion():
+        spin = SpinState(40.0, -20.0, 6.0, 2450000.0, 0.0)
+        law = LommelSeeligerLambert(0.1)
+        data = synthetic_set(ellipsoid(1.5, 1.1, 1.0, 5), spin, law, n_curves=4, n_points=18)
+        return BayesianInversion(
+            data, FacetGeometry.from_sphere(4), spin, lmax=1, law=law, fit_pole=False
+        )
+
+    def test_laplace_scatter_is_positive_and_sized_right(self):
+        bi = self._tiny_inversion()
+        sd = bi.laplace_scatter(bi.initial_state(8, seed=0)[0])
+        if sd is not None:          # pinv can legitimately fail on a tiny problem
+            assert len(sd) == bi.n_dim
+            assert np.all(sd > 0.0) and np.all(np.isfinite(sd))
+
+    def test_target_tau_extends_the_chain(self):
+        bi = self._tiny_inversion()
+        n_walkers = 2 * bi.n_dim + 2
+        short = bi.run(n_walkers=n_walkers, n_steps=200, seed=0)
+        grown = bi.run(
+            n_walkers=n_walkers, n_steps=200, seed=0, target_tau=30, max_steps=1200
+        )
+        assert len(grown.samples) > len(short.samples)
+
+    def test_max_steps_is_respected(self):
+        bi = self._tiny_inversion()
+        n_walkers = 2 * bi.n_dim + 2
+        grown = bi.run(
+            n_walkers=n_walkers, n_steps=100, seed=0,
+            target_tau=10_000, max_steps=400,   # unreachable target
+        )
+        assert len(grown.samples) <= n_walkers * 400

@@ -328,6 +328,10 @@ class _ConvexInversionBase:
         self._counts = data.counts
         self._offsets = data.offsets
         self._observed = self._build_observed()
+        # sqrt of the per-curve weight, broadcast to every point of that curve.
+        self._point_weight = np.concatenate(
+            [np.full(len(c), np.sqrt(max(c.weight, 0.0))) for c in data]
+        )
         self._design_cache: tuple[tuple, np.ndarray] | None = None
 
     # ------------------------------------------------------------------
@@ -402,7 +406,9 @@ class _ConvexInversionBase:
 
     def _residuals(self, areas: np.ndarray, design: np.ndarray, want_jac: bool):
         model, jac = self._model_and_jacobian(areas, design, want_jac)
-        res = model - self._observed
+        res = (model - self._observed) * self._point_weight
+        if want_jac and jac is not None:
+            jac = jac * self._point_weight[:, None]
         creg, cjac = self._convexity_rows(areas)
         full = np.concatenate([res, creg])
         if not want_jac:
@@ -429,7 +435,7 @@ class _ConvexInversionBase:
         return InversionResult(
             areas=areas,
             parameters=params,
-            spin=spin,
+            spin=spin.normalised(),
             law=law,
             chi2=chi2,
             rms=float(np.sqrt(chi2 / max(n - 3, 1))),
@@ -506,6 +512,14 @@ class HarmonicInversion(_ConvexInversionBase):
         self.fit_pole = bool(fit_pole)
         self.fit_period = bool(fit_period)
         self.fit_scattering = bool(fit_scattering)
+        # Only vary the scattering parameters the objective can actually
+        # constrain; see ScatteringLaw.free_parameter_mask.
+        self._law_mask = np.asarray(self.model.law.free_parameter_mask, dtype=bool)
+        _lo, _hi = self.model.law.parameter_bounds
+        self._law_bounds = (
+            np.asarray(_lo, float)[self._law_mask],
+            np.asarray(_hi, float)[self._law_mask],
+        )
         # Section 3.4: with relative photometry "the coefficient a00 in (8) is
         # a scale factor as well, so it can be left out of the parameter set".
         self.fix_scale = self.objective is Objective.RELATIVE
@@ -540,9 +554,11 @@ class HarmonicInversion(_ConvexInversionBase):
             spin = SpinState(spin.lam, spin.beta, params[pos], spin.t0, spin.phi0, spin.yorp)
             pos += 1
         if self.fit_scattering:
-            n_law = len(np.atleast_1d(law.parameters))
-            law = law.with_parameters(params[pos : pos + n_law])
-            pos += n_law
+            mask = self._law_mask
+            full = np.atleast_1d(law.parameters).astype(float).copy()
+            full[mask] = params[pos : pos + int(mask.sum())]
+            law = law.with_parameters(full)
+            pos += int(mask.sum())
         return coeffs, spin, law
 
     def areas_from_coefficients(self, coeffs: np.ndarray) -> np.ndarray:
@@ -562,7 +578,7 @@ class HarmonicInversion(_ConvexInversionBase):
         if self.fit_period:
             parts.append([self.spin.period])
         if self.fit_scattering:
-            parts.append(np.atleast_1d(self.model.law.parameters))
+            parts.append(np.atleast_1d(self.model.law.parameters)[self._law_mask])
         return np.concatenate([np.atleast_1d(np.asarray(p, dtype=float)) for p in parts])
 
     def _residual_fn(self, params: np.ndarray) -> np.ndarray:
@@ -632,16 +648,31 @@ class HarmonicInversion(_ConvexInversionBase):
         self._fixed_a00 = float(coeffs0[0])
         p0 = self._pack_initial(coeffs0)
 
-        sol = least_squares(
-            self._residual_fn,
-            p0,
+        # Bounds are only needed for the scattering block; everything else is
+        # genuinely unconstrained.  SciPy's "lm" cannot take bounds, so the
+        # bounded case switches to the trust-region method.
+        lower = np.full(len(p0), -np.inf)
+        upper = np.full(len(p0), np.inf)
+        if self.fit_scattering:
+            n_law = int(self._law_mask.sum())
+            lower[len(p0) - n_law :] = self._law_bounds[0]
+            upper[len(p0) - n_law :] = self._law_bounds[1]
+            p0 = np.clip(p0, lower + 1e-12, upper - 1e-12)
+        bounded = np.isfinite(lower).any() or np.isfinite(upper).any()
+
+        kwargs = dict(
             jac=self._jacobian_fn,
-            method="lm",
             max_nfev=max_iter * (len(p0) + 1),
             xtol=xtol,
             ftol=ftol,
             verbose=2 if verbose else 0,
         )
+        if bounded:
+            sol = least_squares(
+                self._residual_fn, p0, method="trf", bounds=(lower, upper), **kwargs
+            )
+        else:
+            sol = least_squares(self._residual_fn, p0, method="lm", **kwargs)
         coeffs, spin, law = self._unpack(sol.x)
         areas = self.areas_from_coefficients(coeffs)
         return self._finalise(
