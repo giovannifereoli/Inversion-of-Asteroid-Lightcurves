@@ -213,6 +213,28 @@ masks and blocker-pair sets are *identical* and the lightcurves agree to machine
 precision (~1e-16) on convex, waisted, bilobed, Gaussian-random and detached
 binary bodies. The Rust code is an optimisation, not a second algorithm.
 
+## Documentation
+
+The site is built from the package's own docstrings — there is no second copy of
+the API to fall out of date.
+
+```bash
+pip install -e ".[docs]"
+mkdocs serve            # live preview on http://127.0.0.1:8000
+mkdocs build --strict   # fails on a broken link or a bad reference
+```
+
+`docs/scripts/gen_api.py` walks `src/lcinv/` at build time and emits one page per
+module, so a new module gets a documented page automatically and a deleted one
+cannot leave a stale page behind. Pages carry rendered parameter tables, type
+annotations and a link to the source.
+
+The docstrings themselves are tested (`tests/test_docstrings.py`): every public
+object must have a docstring, every callable taking more than one argument must
+document its parameters, section headings must be ones mkdocstrings understands,
+and every module must appear in the API grouping. All 232 public objects
+currently pass.
+
 ## Limitations
 
 Stated plainly, because they affect what the results mean:

@@ -121,14 +121,27 @@ def test_the_package_itself_is_documented():
 
 def test_every_module_is_in_a_documentation_group():
     """The API pages are generated from an explicit grouping; nothing may fall out."""
-    import runpy
+    import ast
     from pathlib import Path
 
     script = Path(__file__).resolve().parents[1] / "docs" / "scripts" / "gen_api.py"
-    source = script.read_text()
-    namespace: dict = {}
-    exec(compile(source.split("nav_lines =")[0], str(script), "exec"), namespace)
-    grouped = {name for _, names in namespace["GROUPS"] for name in names}
+    # Read GROUPS declaratively rather than executing the script, which needs
+    # mkdocs_gen_files and a live build context.
+    tree = ast.parse(script.read_text())
+    groups = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AnnAssign | ast.Assign)
+        and any(
+            getattr(t, "id", None) == "GROUPS"
+            for t in ([node.target] if isinstance(node, ast.AnnAssign) else node.targets)
+        )
+    )
+    grouped = {
+        name
+        for entry in ast.literal_eval(groups)
+        for name in entry[1]
+    }
     assert set(_modules()) <= grouped, (
         f"not in any GROUPS entry of gen_api.py: {sorted(set(_modules()) - grouped)}"
     )
