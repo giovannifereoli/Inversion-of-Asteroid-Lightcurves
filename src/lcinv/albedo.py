@@ -42,12 +42,38 @@ __all__ = ["AlbedoSeparation", "AlbedoResult", "logistic_albedo", "inverse_logis
 
 
 def logistic_albedo(c: np.ndarray, low: float, high: float) -> np.ndarray:
-    """Eq. (12) - map unconstrained ``c`` into the albedo interval ``[low, high]``."""
+    """Eq. (12) - map unconstrained ``c`` into the albedo interval ``[low, high]``.
+
+    Parameters
+    ----------
+    c:
+        The unconstrained optimisation variable, any real value.
+    low, high:
+        The interval ``[a, b]`` the albedo is confined to.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``a + (b - a) e^c / (e^c + 1)``, strictly inside ``[low, high]``.
+    """
     return low + (high - low) / (1.0 + np.exp(-np.asarray(c, dtype=float)))
 
 
 def inverse_logistic_albedo(w: np.ndarray, low: float, high: float) -> np.ndarray:
-    """Inverse of :func:`logistic_albedo`, for building an initial guess."""
+    """Inverse of :func:`logistic_albedo`, for building an initial guess.
+
+    Parameters
+    ----------
+    w:
+        Albedo values; clipped just inside ``[low, high]`` so the logit is finite.
+    low, high:
+        The same interval used by :func:`logistic_albedo`.
+
+    Returns
+    -------
+    numpy.ndarray
+        The unconstrained variable ``c``.
+    """
     x = (np.asarray(w, dtype=float) - low) / (high - low)
     x = np.clip(x, 1e-9, 1.0 - 1e-9)
     return np.log(x / (1.0 - x))

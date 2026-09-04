@@ -17,3 +17,6 @@ site/
 # Downloaded DAMIT data (regenerate with `lcinv fetch`)
 data/damit/
 outputs/
+
+# Rust build artefacts
+src/lcinv_rust/target/

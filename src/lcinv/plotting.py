@@ -350,7 +350,19 @@ def plot_period_scan(
 
 
 def plot_pole_samples(lam: np.ndarray, beta: np.ndarray, truth: tuple[float, float] | None = None):
-    """Posterior pole directions on an equal-area (Hammer) projection."""
+    """Posterior pole directions on an equal-area (Hammer) projection.
+
+    Parameters
+    ----------
+    lam, beta:
+        Posterior samples of the ecliptic longitude and latitude, in degrees.
+    truth:
+        Optional ``(lambda, beta)`` reference pole to mark.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
+    """
     import matplotlib.pyplot as plt
 
     tok = _tokens()
@@ -414,6 +426,20 @@ def plot_facet_values(geometry, areas: np.ndarray, title: str = "Curvature funct
 
     This is the quantity the inversion actually determines; the shape follows
     from it only after Minkowski minimisation.
+
+    Parameters
+    ----------
+    geometry:
+        The normal directions the values belong to.
+    areas:
+        ``(M,)`` solved facet values ``g_j``; divided by the sphere areas to
+        recover ``G`` itself.
+    title:
+        Figure title.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
     """
     import matplotlib.pyplot as plt
 
@@ -512,6 +538,19 @@ def plot_phase_function(laws, labels, alpha_max_deg=25.0):
     step 3 adds; this shows how far the fitted function moves from the
     defaults, and therefore how much of the shape solution was being absorbed
     by the scattering model.
+
+    Parameters
+    ----------
+    laws:
+        Scattering laws to compare; those without a phase function are skipped.
+    labels:
+        One name per law, used for both the legend and the direct labels.
+    alpha_max_deg:
+        Upper end of the plotted phase-angle range.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
     """
     import matplotlib.pyplot as plt
 
@@ -538,6 +577,19 @@ def plot_residuals(data, models, bins: int = 40):
     checks Section 3.5's concern about observing geometry, by showing whether
     the fit degrades systematically at the phase angles that carry the shape
     information.
+
+    Parameters
+    ----------
+    data:
+        The observations.
+    models:
+        Model brightnesses per curve, normalised the same way as the data.
+    bins:
+        Histogram bin count for the pooled residuals.
+
+    Returns
+    -------
+    matplotlib.figure.Figure
     """
     import matplotlib.pyplot as plt
 

@@ -24,7 +24,7 @@ minimum.
 
 | Paper | Module |
 |---|---|
-| Eq. (1), scattering laws | [`lcinv.scattering`](api.md#scattering-laws) |
+| Eq. (1), scattering laws | [`lcinv.scattering`](api/scattering.md) |
 | Section 2, nonconvex direct problem | [`lcinv.raytracer`](direct-problem.md) |
 | Section 3.1, facet areas + conjugate gradients | [`lcinv.convex.FacetInversion`](convex-inversion.md) |
 | Section 3.2, harmonics + Levenberg–Marquardt | [`lcinv.convex.HarmonicInversion`](convex-inversion.md) |

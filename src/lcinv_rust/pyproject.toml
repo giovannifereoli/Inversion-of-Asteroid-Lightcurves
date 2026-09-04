@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "lcinv-rust"
+version = "0.1.0"
+description = "Optional Rust kernels for lcinv (ray tracing and local-blocker construction)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[tool.maturin]
+module-name = "lcinv_rust"
+features = ["pyo3/extension-module"]

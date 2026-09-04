@@ -5,8 +5,18 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from lcinv import LommelSeeligerLambert, RayTracer, ellipsoid, paper_shape, sphere
-from lcinv.raytracer import hexagonal_facet_samples
+from lcinv import (
+    LommelSeeligerLambert,
+    RayTracer,
+    binary,
+    castalia_like,
+    ellipsoid,
+    gaussian_random_sphere,
+    paper_shape,
+    peanut,
+    sphere,
+)
+from lcinv.raytracer import ACCELERATED, hexagonal_facet_samples
 
 LAW = LommelSeeligerLambert(1.0)
 RNG = np.random.default_rng(0)
@@ -159,3 +169,68 @@ def test_isotropic_sphere_has_a_flat_lightcurve():
     earth = np.column_stack([np.cos(angle), np.sin(angle), np.zeros_like(angle)])
     curve = tracer.lightcurve(earth, earth, LAW)
     assert curve.std() / curve.mean() < 2e-3
+
+
+@pytest.mark.skipif(not ACCELERATED, reason="lcinv-rust is not installed")
+class TestRustMatchesPython:
+    """The Rust kernels are an optimisation, not a different algorithm.
+
+    Every assertion here is exact or to machine precision: if the two paths
+    ever disagree, one of them is wrong.
+    """
+
+    BODIES = [
+        ("convex ellipsoid", lambda: ellipsoid(2.0, 1.3, 1.0, 7)),
+        ("peanut", lambda: peanut(7)),
+        ("castalia", lambda: castalia_like(8)),
+        ("gaussian sphere", lambda: gaussian_random_sphere(0.25, 3.0, 6, 7, seed=1)),
+        ("binary (two components)", lambda: binary(6)),
+    ]
+
+    @staticmethod
+    def _directions(n=60, seed=0):
+        rng = np.random.default_rng(seed)
+        e = rng.normal(size=(n, 3))
+        s = rng.normal(size=(n, 3))
+        return (
+            e / np.linalg.norm(e, axis=1, keepdims=True),
+            s / np.linalg.norm(s, axis=1, keepdims=True),
+        )
+
+    @pytest.mark.parametrize("name,build", BODIES, ids=[b[0] for b in BODIES])
+    def test_blocker_construction_is_identical(self, name, build):
+        body = build()
+        py = RayTracer(body, backend="python")
+        rs = RayTracer(body, backend="rust")
+        assert np.array_equal(py.hull_facet_mask, rs.hull_facet_mask)
+        assert np.allclose(py.blocker_height, rs.blocker_height, rtol=1e-12, atol=1e-14)
+        # The pair list may be ordered differently but must hold the same pairs.
+        py_pairs = set(zip(py._pair_facet.tolist(), py._pair_blocker.tolist()))
+        rs_pairs = set(zip(rs._pair_facet.tolist(), rs._pair_blocker.tolist()))
+        assert py_pairs == rs_pairs
+
+    @pytest.mark.parametrize("name,build", BODIES, ids=[b[0] for b in BODIES])
+    def test_lightcurves_agree_to_machine_precision(self, name, build):
+        body = build()
+        e, s = self._directions()
+        law = LommelSeeligerLambert(0.1)
+        a = RayTracer(body, backend="python").lightcurve(e, s, law)
+        b = RayTracer(body, backend="rust").lightcurve(e, s, law)
+        assert np.allclose(a, b, rtol=1e-12, atol=1e-14)
+
+    def test_fractions_agree_with_subpoints(self):
+        """Partial shadowing must match too, not just the all-or-nothing case."""
+        body = castalia_like(8)
+        e, s = self._directions(n=24, seed=3)
+        py = RayTracer(body, n_subpoints=7, seed=11, backend="python")
+        rs = RayTracer(body, n_subpoints=7, seed=11, backend="rust")
+        a = np.asarray([py.visible_illuminated_fraction(e[i], s[i]) for i in range(len(e))])
+        b = rs.visible_illuminated_fractions(e, s)
+        assert np.array_equal(a, b)
+        assert ((a > 0.0) & (a < 1.0)).any(), "no partially shadowed facets in this test"
+
+    def test_backend_selection(self):
+        body = peanut(6)
+        assert RayTracer(body, backend="auto")._pair_start is not None
+        with pytest.raises(ValueError, match="backend must be"):
+            RayTracer(body, backend="nonsense")

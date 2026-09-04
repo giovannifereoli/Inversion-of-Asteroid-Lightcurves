@@ -134,3 +134,29 @@ repeatedly points to.
 This is why convex inversion works, and equally why the depth of a concavity is not
 recoverable from photometry. `lcinv.optimal_scale` implements Eq. (14), the scale
 coefficient the paper uses when comparing a body with its hull.
+
+## Optional Rust kernels
+
+The occlusion test and the local-blocker precomputation are available as an
+optional Rust extension in `src/lcinv_rust/`, built with
+
+```bash
+maturin develop --release -m src/lcinv_rust/Cargo.toml
+```
+
+`RayTracer` picks it up automatically (`backend="auto"`); `backend="python"`
+forces the NumPy path. `lcinv.raytracer.ACCELERATED` reports which is in use.
+
+The kernels mirror the NumPy code exactly, tolerances included — the same
+`1e-14` determinant cut-off, the same back-face cull, the same `8 * eps` nudge
+off the surface — so the test suite can compare them element for element.
+Parallelism is over *observations* (`rayon`), which is the axis with no shared
+state.
+
+Typical gain is 40–70x on nonconvex bodies, and a nonconvex inversion of
+(269) Justitia drops from 164 s to 4.4 s.
+
+!!! note "It is not a different algorithm"
+    If the two backends ever disagree, that is a bug in one of them. The tests
+    assert identical hull masks and blocker sets, and lightcurves matching to
+    ~1e-16.

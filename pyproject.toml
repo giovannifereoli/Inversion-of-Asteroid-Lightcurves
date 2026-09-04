@@ -32,7 +32,14 @@ dev = [
     "emcee>=3.1",
     "corner>=2.2",
 ]
-docs = ["mkdocs>=1.5", "mkdocs-material>=9.5", "mkdocstrings[python]>=0.24"]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+    "mkdocs-gen-files>=0.5",
+    "mkdocs-literate-nav>=0.6",
+    "mkdocs-section-index>=0.3",
+]
 
 [project.urls]
 Homepage = "https://github.com/gife3672/Inversion-of-Asteroid-Lightcurves"

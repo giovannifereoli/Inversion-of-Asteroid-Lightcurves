@@ -158,6 +158,7 @@ class RadialShapeSeries:
 
     @property
     def n_parameters(self) -> int:
+        """Number of series coefficients, ``(lmax + 1) ** 2``."""
         return n_coefficients(self.lmax)
 
     #: ``Y_00`` is constant, so ``c_00`` scales the whole body.
@@ -234,6 +235,7 @@ class CylindricalShapeSeries:
 
     @property
     def n_parameters(self) -> int:
+        """Number of series coefficients in the cylindrical expansion."""
         return self.basis.shape[1]
 
     #: The ``j = k = 0`` term is constant, so it scales the whole body.

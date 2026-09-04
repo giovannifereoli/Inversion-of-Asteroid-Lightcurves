@@ -97,6 +97,19 @@ class BayesResult:
         This is the payoff of sampling: instead of one convex solution, a
         spread of them, whose scatter shows which features the data actually
         constrain.
+
+        Parameters
+        ----------
+        n:
+            Number of posterior draws to reconstruct.
+        seed:
+            Seed for choosing which samples to draw.
+        **kwargs:
+            Passed to :func:`~lcinv.minkowski.minkowski_solve`.
+
+        Returns
+        -------
+        list of ~lcinv.minkowski.MinkowskiResult
         """
         if self._owner is None:  # pragma: no cover - defensive
             raise RuntimeError("result is not attached to an inversion")
@@ -357,8 +370,19 @@ class BayesianInversion:
         deviations, so the walkers start comfortably inside the posterior
         rather than having to find its scale by random walk.
 
-        Returns ``None`` if the Jacobian is unusable, so callers can fall back
-        to fixed scatters.
+        Parameters
+        ----------
+        theta:
+            Full parameter vector to linearise about, normally the optimiser's
+            solution.
+        fraction:
+            Fraction of each standard deviation to return.
+
+        Returns
+        -------
+        numpy.ndarray or None
+            ``(n_dim,)`` widths, or ``None`` when the Jacobian is unusable so
+            that callers can fall back to fixed scatters.
         """
         try:
             params = np.asarray(theta, dtype=float)[:-1]
@@ -490,6 +514,20 @@ class BayesianInversion:
         Passing this to :meth:`run` begins the chain at the optimiser's
         solution, so the burn-in only has to explore the mode rather than find
         it.
+
+        Parameters
+        ----------
+        result:
+            A converged :class:`~lcinv.convex.InversionResult` whose free
+            parameters match this inversion's.
+        sigma:
+            Starting noise level; taken from the result's residual scatter
+            when omitted.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(n_dim,)`` starting vector, including ``log_sigma``.
         """
         params = np.asarray(result.parameters, dtype=float)
         if len(params) != self.n_dim - 1:
@@ -512,5 +550,17 @@ class BayesianInversion:
         return spin
 
     def shape_from_sample(self, theta: np.ndarray, **kwargs) -> MinkowskiResult:
-        """Reconstruct the convex body implied by one posterior sample."""
+        """Reconstruct the convex body implied by one posterior sample.
+
+        Parameters
+        ----------
+        theta:
+            One row of :attr:`BayesResult.samples`.
+        **kwargs:
+            Passed to :func:`~lcinv.minkowski.minkowski_solve`.
+
+        Returns
+        -------
+        ~lcinv.minkowski.MinkowskiResult
+        """
         return minkowski_solve(self.geometry.normals, self.areas_from_sample(theta), **kwargs)

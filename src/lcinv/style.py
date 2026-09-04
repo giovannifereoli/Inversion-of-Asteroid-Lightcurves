@@ -78,7 +78,20 @@ def series_colors(mode: str = "light") -> list[str]:
 
 
 def sequential_cmap(mode: str = "light", reverse: bool = False):
-    """One-hue light-to-dark ramp for continuous magnitude."""
+    """One-hue light-to-dark ramp for continuous magnitude.
+
+    Parameters
+    ----------
+    mode:
+        ``"light"`` or ``"dark"``, each stepped for its own surface.
+    reverse:
+        Put the dark end at low values.  Useful when the *small* values are the
+        interesting ones, since the light end of a ramp recedes into the page.
+
+    Returns
+    -------
+    matplotlib.colors.LinearSegmentedColormap
+    """
     from matplotlib.colors import LinearSegmentedColormap
 
     steps = list(PALETTE[mode]["sequential"])  # type: ignore[arg-type]
@@ -211,7 +224,21 @@ def use_style(mode: str = "light", latex: bool = False) -> dict:
 
 @contextmanager
 def style_context(mode: str = "light", latex: bool = False):
-    """Apply the style for the duration of a ``with`` block."""
+    """Apply the style for the duration of a ``with`` block.
+
+    Parameters
+    ----------
+    mode:
+        ``"light"`` or ``"dark"``.
+    latex:
+        Typeset with a real LaTeX installation, silently ignored if none is
+        on the path.
+
+    Yields
+    ------
+    dict
+        The colour tokens in force inside the block.
+    """
     import matplotlib.pyplot as plt
 
     if latex and shutil.which("latex") is None:

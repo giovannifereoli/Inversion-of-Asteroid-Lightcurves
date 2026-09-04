@@ -164,6 +164,7 @@ class PhaseFunction:
 
     @property
     def parameters(self) -> np.ndarray:
+        """``[a, d, k]`` of ``f(alpha) = a exp(-alpha/d) + k alpha + 1``."""
         return np.array([self.amplitude, self.width, self.slope])
 
 
@@ -188,6 +189,7 @@ class LommelSeeligerLambert(ScatteringLaw):
 
     @property
     def uses_phase_angle(self) -> bool:  # type: ignore[override]
+        """True when a :class:`PhaseFunction` is attached."""
         return self.phase_function is not None
 
     def __call__(self, mu, mu0, alpha=None):
@@ -204,12 +206,14 @@ class LommelSeeligerLambert(ScatteringLaw):
 
     @property
     def parameters(self) -> np.ndarray:
+        """``[c]``, or ``[c, a, d, k]`` when a phase function is attached."""
         if self.phase_function is None:
             return np.array([self.lambert_weight])
         return np.concatenate([[self.lambert_weight], self.phase_function.parameters])
 
     @property
     def parameter_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        """Physical limits: ``c, a >= 0``, ``d > 0`` and ``k <= 0``."""
         if self.phase_function is None:
             return np.array([0.0]), np.array([np.inf])
         #            c        a       d        k
@@ -392,10 +396,12 @@ class Hapke(ScatteringLaw):
 
     @property
     def parameters(self) -> np.ndarray:
+        """``[w, g, B0, h, theta_bar]`` - DAMIT's ``lsm_p1`` to ``lsm_p5``."""
         return np.array([self.w, self.g, self.b0, self.h, self.roughness])
 
     @property
     def free_parameter_mask(self) -> np.ndarray:
+        """All parameters but the albedo ``w``; see the base-class note."""
         # `w` multiplies the whole law and enters the shape only weakly, through
         # H(x); under Eq. (13) it is effectively a scale factor, so it is held
         # fixed.  Free it explicitly only when fitting absolute photometry.
@@ -403,6 +409,7 @@ class Hapke(ScatteringLaw):
 
     @property
     def parameter_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        """Physical Hapke limits, with ``theta_bar`` capped at 60 degrees."""
         #             w      g      B0     h     theta_bar (deg)
         lo = np.array([1e-4, -0.999,  0.0, 1e-4,  0.0])
         hi = np.array([1.0,    0.999, 5.0, 10.0, 60.0])

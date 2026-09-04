@@ -44,6 +44,11 @@ from .scattering import LommelSeeligerLambert, ScatteringLaw
 from .sphharm import design_matrix, n_coefficients
 from .triangulation import facet_adjacency, octant_triangulation
 
+try:  # pragma: no cover - exercised only when the extension is installed
+    import lcinv_rust as _accel
+except ImportError:  # pragma: no cover
+    _accel = None
+
 __all__ = [
     "Objective",
     "FacetGeometry",
@@ -183,6 +188,18 @@ def ellipsoid_log_curvature(
 
     For semi-axes ``a, b, c`` the curvature function in terms of the normal is
     ``G(n) = (abc)^2 / (a^2 n_x^2 + b^2 n_y^2 + c^2 n_z^2)^2``.
+
+    Parameters
+    ----------
+    geometry:
+        The normal directions to evaluate at.
+    a, b, c:
+        Semi-axes of the ellipsoid.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(M,)`` values of ``log G``.
     """
     q = (geometry.normals**2) @ np.array([a**2, b**2, c**2], dtype=float)
     return 2.0 * np.log(a * b * c) - 2.0 * np.log(q)
@@ -236,22 +253,67 @@ class ConvexModel:
             ``A``, zero wherever ``mu <= 0`` or ``mu0 <= 0``.
         """
         n = self.geometry.normals
-        mu = np.asarray(earth_body, dtype=float) @ n.T
-        mu0 = np.asarray(sun_body, dtype=float) @ n.T
-        if self.law.uses_phase_angle:
-            if alpha is None:
-                raise ValueError("this scattering law needs the phase angles")
-            a = np.asarray(alpha, dtype=float)[:, None]
-        else:
-            a = None
+        earth_body = np.asarray(earth_body, dtype=float)
+        sun_body = np.asarray(sun_body, dtype=float)
+        if self.law.uses_phase_angle and alpha is None:
+            raise ValueError("this scattering law needs the phase angles")
+
+        # Fast path: the paper's own law, fused into a single Rust pass.  Every
+        # trial pole needs a fresh design matrix, so this is where a fit with a
+        # free pole spends most of its time.
+        if _accel is not None and isinstance(self.law, LommelSeeligerLambert):
+            pf = self.law.phase_function
+            return _accel.design_matrix_lsl(
+                np.ascontiguousarray(earth_body),
+                np.ascontiguousarray(sun_body),
+                np.ascontiguousarray(n),
+                np.ascontiguousarray(self.albedo),
+                np.ascontiguousarray(
+                    np.zeros(len(earth_body)) if alpha is None
+                    else np.asarray(alpha, dtype=float)
+                ),
+                float(self.law.lambert_weight),
+                [0.0, 1.0, 0.0] if pf is None
+                else [float(pf.amplitude), float(pf.width), float(pf.slope)],
+                pf is not None,
+            )
+
+        mu = earth_body @ n.T
+        mu0 = sun_body @ n.T
+        a = np.asarray(alpha, dtype=float)[:, None] if self.law.uses_phase_angle else None
         return self.law(mu, mu0, a) * self.albedo
 
     def brightness(self, areas: np.ndarray, design: np.ndarray) -> np.ndarray:
-        """``L = A g``."""
+        """Eq. (2), ``L = A g``.
+
+        Parameters
+        ----------
+        areas:
+            ``(M,)`` facet values ``g``.
+        design:
+            ``(N, M)`` matrix from :meth:`design_matrix`.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(N,)`` model brightnesses.
+        """
         return design @ np.asarray(areas, dtype=float)
 
     def polyhedron(self, areas: np.ndarray, **kwargs) -> MinkowskiResult:
-        """Recover the body from ``g`` by Minkowski minimisation (Appendix C)."""
+        """Recover the body from ``g`` by Minkowski minimisation (Appendix C).
+
+        Parameters
+        ----------
+        areas:
+            ``(M,)`` facet values ``g``.
+        **kwargs:
+            Passed to :func:`~lcinv.minkowski.minkowski_solve`.
+
+        Returns
+        -------
+        ~lcinv.minkowski.MinkowskiResult
+        """
         return minkowski_solve(self.geometry.normals, areas, **kwargs)
 
 
@@ -295,7 +357,19 @@ class InversionResult:
     model_lightcurves: list[np.ndarray] = field(default_factory=list)
 
     def shape(self, geometry: FacetGeometry, **kwargs) -> MinkowskiResult:
-        """Run Minkowski minimisation on :attr:`areas`."""
+        """Run Minkowski minimisation on :attr:`areas`.
+
+        Parameters
+        ----------
+        geometry:
+            The normal directions the areas belong to.
+        **kwargs:
+            Passed to :func:`~lcinv.minkowski.minkowski_solve`.
+
+        Returns
+        -------
+        ~lcinv.minkowski.MinkowskiResult
+        """
         return minkowski_solve(geometry.normals, self.areas, **kwargs)
 
 
@@ -362,6 +436,17 @@ class _ConvexInversionBase:
         raw = design @ areas
         if self.objective is Objective.ABSOLUTE:
             return raw, (design if want_jac else None)
+
+        if (
+            _accel is not None
+            and self.objective is Objective.RELATIVE
+            and design.flags["C_CONTIGUOUS"]
+        ):
+            model, jac = _accel.normalise_relative(
+                np.ascontiguousarray(raw), design,
+                np.ascontiguousarray(self._offsets, dtype=np.int64), bool(want_jac),
+            )
+            return model, (jac if want_jac else None)
 
         out = np.empty_like(raw)
         jac = np.empty_like(design) if want_jac else None
@@ -531,7 +616,18 @@ class HarmonicInversion(_ConvexInversionBase):
         return n_coefficients(self.lmax)
 
     def initial_coefficients(self, a: float = 1.0, b: float = 1.0, c: float = 1.0) -> np.ndarray:
-        """Least-squares fit of ``log G`` for an ellipsoid - the paper's start."""
+        """Least-squares fit of ``log G`` for an ellipsoid - the paper's start.
+
+        Parameters
+        ----------
+        a, b, c:
+            Semi-axes of the initial triaxial ellipsoid.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(lmax + 1) ** 2`` harmonic coefficients.
+        """
         target = ellipsoid_log_curvature(self.geometry, a, b, c)
         coeffs, *_ = np.linalg.lstsq(self.basis, target, rcond=None)
         return coeffs
@@ -700,6 +796,26 @@ class FacetInversion(_ConvexInversionBase):
     series method gives "a fast initial solution that can then be enhanced with
     the polyhedron method", and the facet parametrisation is what resolves the
     "large planar areas" that mark concavities.
+
+    Parameters
+    ----------
+    data:
+        The observations.
+    geometry:
+        The fixed set of surface normal directions.
+    spin:
+        Rotation state, held fixed - this method solves for shape only.
+    law:
+        Scattering law.
+    objective:
+        Which chi-squared of the paper to minimise.
+    convexity_weight:
+        Weight of the Eq. (3) rows; zero lets ``g`` absorb albedo variegation.
+    convexity_components:
+        ``"xyz"``, ``"z"`` or ``"none"``; Section 3.4 notes that with Eq. (13)
+        "it is sufficient to include only the z-component term of (3)".
+    albedo:
+        Per-facet ``varpi``.
     """
 
     def __init__(

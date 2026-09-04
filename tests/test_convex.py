@@ -22,6 +22,7 @@ from lcinv import (
     paper_shape,
 )
 from lcinv.convex import ConvexModel, ellipsoid_log_curvature
+from lcinv.raytracer import ACCELERATED as _ACCELERATED
 
 REFERENCE = Path(__file__).parent / "data" / "test_lcs_rel.txt"
 
@@ -278,3 +279,94 @@ class TestAgainstReferenceImplementation:
         assert result.spin.beta == pytest.approx(self.REF_BETA, abs=2.0)
         assert result.spin.period == pytest.approx(self.REF_PERIOD, abs=1e-4)
         assert result.chi2 <= self.REF_CHI2
+
+
+@pytest.mark.skipif(not _ACCELERATED, reason="lcinv-rust is not installed")
+class TestRustKernelsMatchNumpy:
+    """The convex-inversion kernels, like the tracer, must be pure optimisation."""
+
+    @pytest.fixture(scope="class")
+    def setup(self):
+        spin = SpinState(35.0, -20.0, 7.5, 2450000.0, 0.0)
+        law = LommelSeeligerLambert(0.12, PhaseFunction(0.5, 0.1, -0.5))
+        data = synthetic_set(ellipsoid(1.6, 1.1, 0.9, 7), spin, law, n_curves=9, n_points=37)
+        geometry = FacetGeometry.from_sphere(7)
+        return data, geometry, spin, law
+
+    @pytest.mark.parametrize("with_phase", [False, True])
+    def test_design_matrix_agrees(self, setup, with_phase):
+        data, geometry, spin, _ = setup
+        law = LommelSeeligerLambert(
+            0.12, PhaseFunction(0.5, 0.1, -0.5) if with_phase else None
+        )
+        model = ConvexModel(geometry, law, albedo=np.linspace(0.8, 1.2, len(geometry)))
+        sun, earth = data.body_directions(spin)
+        alpha = data.phase_angles
+
+        import lcinv.convex as convex_module
+
+        saved = convex_module._accel
+        try:
+            convex_module._accel = None
+            reference = model.design_matrix(earth, sun, alpha)
+        finally:
+            convex_module._accel = saved
+        accelerated = model.design_matrix(earth, sun, alpha)
+        assert np.allclose(reference, accelerated, rtol=1e-13, atol=1e-15)
+        # Eq. (4): the matrix must vanish where the facet is unlit or unseen.
+        assert np.array_equal(reference == 0.0, accelerated == 0.0)
+
+    def test_relative_normalisation_and_jacobian_agree(self, setup):
+        data, geometry, spin, law = setup
+        inversion = HarmonicInversion(
+            data, geometry, spin, lmax=4, law=law,
+            objective=Objective.RELATIVE, convexity_weight=0.1,
+        )
+        areas = inversion.areas_from_coefficients(
+            inversion.initial_coefficients(1.4, 1.0, 0.9)
+        )
+        design = inversion._design(spin, law)
+
+        import lcinv.convex as convex_module
+
+        saved = convex_module._accel
+        try:
+            convex_module._accel = None
+            model_ref, jac_ref = inversion._model_and_jacobian(areas, design, True)
+        finally:
+            convex_module._accel = saved
+        model_acc, jac_acc = inversion._model_and_jacobian(areas, design, True)
+
+        assert np.allclose(model_ref, model_acc, rtol=1e-12, atol=1e-14)
+        assert np.allclose(jac_ref, jac_acc, rtol=1e-12, atol=1e-14)
+
+    def test_each_model_curve_has_unit_mean(self, setup):
+        """Eq. (13) normalises every model lightcurve to mean one."""
+        data, geometry, spin, law = setup
+        inversion = HarmonicInversion(
+            data, geometry, spin, lmax=4, law=law, objective=Objective.RELATIVE
+        )
+        areas = inversion.areas_from_coefficients(
+            inversion.initial_coefficients(1.4, 1.0, 0.9)
+        )
+        model, _ = inversion._model_and_jacobian(
+            areas, inversion._design(spin, law), False
+        )
+        offsets = data.offsets
+        for i in range(len(data)):
+            block = model[offsets[i] : offsets[i + 1]]
+            assert block.mean() == pytest.approx(1.0, rel=1e-12)
+
+    def test_model_without_jacobian_matches_the_jacobian_path(self, setup):
+        data, geometry, spin, law = setup
+        inversion = HarmonicInversion(
+            data, geometry, spin, lmax=4, law=law, objective=Objective.RELATIVE
+        )
+        areas = inversion.areas_from_coefficients(
+            inversion.initial_coefficients(1.4, 1.0, 0.9)
+        )
+        design = inversion._design(spin, law)
+        a, _ = inversion._model_and_jacobian(areas, design, False)
+        b, jac = inversion._model_and_jacobian(areas, design, True)
+        assert np.array_equal(a, b)
+        assert jac.shape == design.shape

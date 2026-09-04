@@ -229,6 +229,18 @@ class DamitClient:
         The first line holds ``lambda``, ``beta`` and ``P``; the second ``t0``
         and ``phi0``; the third, when present, the scattering parameters
         ``p1`` to ``p5``.
+
+        Parameters
+        ----------
+        model_id:
+            DAMIT ``asteroid_models.id``.
+        refresh:
+            Re-download even if a cached copy exists.
+
+        Returns
+        -------
+        spin, law:
+            The rotation state and the scattering law it was derived with.
         """
         path = self._fetch(
             f"generated_files/open/AsteroidModel/{model_id}/spin.txt",
@@ -244,7 +256,20 @@ class DamitClient:
         return SpinState(lam, beta, period, t0, phi0, float(record.get("yorp") or 0.0)), law
 
     def shape(self, model_id: int | str, refresh: bool = False) -> Polyhedron:
-        """Download a model's shape as a :class:`~lcinv.mesh.Polyhedron`."""
+        """Download a model's shape as a :class:`~lcinv.mesh.Polyhedron`.
+
+        Parameters
+        ----------
+        model_id:
+            DAMIT ``asteroid_models.id``.
+        refresh:
+            Re-download even if a cached copy exists.
+
+        Returns
+        -------
+        ~lcinv.mesh.Polyhedron
+            The published shape, in the model's own units.
+        """
         path = self._fetch(
             f"generated_files/open/AsteroidModel/{model_id}/shape.obj",
             f"{model_id}.shape.obj", refresh,
@@ -295,15 +320,41 @@ class DamitClient:
 
         This is the one call an example script needs.
 
+        Parameters
+        ----------
+        model_id:
+            DAMIT ``asteroid_models.id`` - the number in an
+            ``/asteroid_models/view/<id>`` URL.
+        fmt:
+            ``"json"`` to keep each curve's bibliographic references, or
+            ``"txt"`` for the lighter plaintext export.
+
         Returns
         -------
-        model, data
+        model, data:
+            The :class:`DamitModel` and its
+            :class:`~lcinv.lightcurve.LightcurveSet`.
         """
         model = self.model(model_id)
         return model, self.lightcurves(model.asteroid_id, fmt=fmt)
 
 
 def compare_poles(a: SpinState, b: SpinState) -> float:
-    """Angle in degrees between two spin axes."""
+    """Angle in degrees between two spin axes.
+
+    The right way to compare poles: near the ecliptic poles a large difference
+    in ``lambda`` can mean a tiny difference in direction, so comparing the two
+    angles separately is misleading.
+
+    Parameters
+    ----------
+    a, b:
+        The rotation states whose axes are compared.
+
+    Returns
+    -------
+    float
+        The angle between the two axes, in degrees, in ``[0, 180]``.
+    """
     cos = float(np.clip(a.pole_vector() @ b.pole_vector(), -1.0, 1.0))
     return float(np.degrees(np.arccos(cos)))

@@ -95,10 +95,12 @@ class Polyhedron:
 
     @property
     def n_vertices(self) -> int:
+        """Number of vertices."""
         return len(self._vertices)
 
     @property
     def n_facets(self) -> int:
+        """Number of triangular facets."""
         return len(self._facets)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -339,7 +341,15 @@ class Polyhedron:
         return cls(np.asarray(verts, dtype=float), np.asarray(faces, dtype=np.int64))
 
     def to_obj(self, path: str | Path, name: str = "asteroid") -> None:
-        """Write a Wavefront ``.obj`` file."""
+        """Write a Wavefront ``.obj`` file.
+
+        Parameters
+        ----------
+        path:
+            Destination file.
+        name:
+            Object name written in the ``o`` record.
+        """
         lines = [f"o {name}"]
         lines += [f"v {x:.8f} {y:.8f} {z:.8f}" for x, y, z in self._vertices]
         lines += [f"f {a + 1} {b + 1} {c + 1}" for a, b, c in self._facets]

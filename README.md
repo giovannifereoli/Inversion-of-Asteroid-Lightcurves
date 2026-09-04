@@ -159,6 +159,60 @@ code, and the API reference.
 
 ---
 
+## Optional Rust kernels
+
+Section 2's ray tracer dominates nonconvex inversion: a Levenberg-Marquardt
+Jacobian over 49 shape coefficients needs about fifty full traces per iteration,
+and each trace runs a Moller-Trumbore test over every
+(observation, facet, test point, local blocker) combination. That kernel, and the
+local-blocker precomputation beside it, are the only things in the package worth
+leaving Python for - the Minkowski solve is dominated by Qhull, which is already C.
+
+Both live in [`src/lcinv_rust/`](src/lcinv_rust/) as an **optional** extension.
+Without it everything still runs, on the NumPy path.
+
+```bash
+pip install maturin
+maturin develop --release -m src/lcinv_rust/Cargo.toml
+```
+
+```python
+from lcinv.raytracer import ACCELERATED
+ACCELERATED          # True when the extension is importable
+RayTracer(body, backend="python")   # force NumPy, e.g. to compare
+```
+
+Three kernels are ported. Measured on this machine (Apple M-series):
+
+| kernel | used by | speed-up |
+|---|---|---|
+| `trace_fractions` — Moller-Trumbore occlusion | nonconvex inversion | **40–70×** |
+| `build_blockers` — local-blocker precomputation | nonconvex inversion | folded into the above |
+| `normalise_relative` — Eq. (13) and its Jacobian | every fit | **4.3×** |
+| `design_matrix_lsl` — Eq. (4), fused | fits with a free pole | **6–8×** |
+
+End to end:
+
+| workload | NumPy | Rust | |
+|---|---|---|---|
+| nonconvex inversion of (269) Justitia | 164 s | 4.4 s | **37×** |
+| 46-start pole scan | 211 s | 112 s | **1.9×** |
+| 122-trial period scan | 96 s | 52 s | **1.8×** |
+| convex harmonic fit, free pole | 1.85 s | 0.80 s | **2.3×** |
+
+The gap between the tracer and the rest is the point: ray tracing is a deep loop
+nest that NumPy has to walk in Python, while the convex forward model is already
+mostly BLAS. Two things were deliberately *not* ported:
+
+* **Minkowski minimisation** — 88% of it is Qhull, which is already C.
+* **`FacetInversion`** — its pole is fixed, so the design matrix is built once
+  and cached; there is nothing left to accelerate.
+
+The two paths are held together by the test suite, which asserts that the hull
+masks and blocker-pair sets are *identical* and the lightcurves agree to machine
+precision (~1e-16) on convex, waisted, bilobed, Gaussian-random and detached
+binary bodies. The Rust code is an optimisation, not a second algorithm.
+
 ## Limitations
 
 Stated plainly, because they affect what the results mean:

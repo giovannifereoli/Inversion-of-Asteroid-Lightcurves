@@ -23,7 +23,11 @@ nav:
       - Bayesian inversion: bayesian.md
   - Validation: validation.md
   - Working with real data: damit.md
-  - API reference: api.md
+  - API reference: api/
+# The generated nav file is consumed by literate-nav; it is not a page.
+exclude_docs: |
+  scripts/
+
 markdown_extensions:
   - admonition
   - pymdownx.details
@@ -35,12 +39,29 @@ extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 plugins:
   - search
+  - gen-files:
+      scripts: [docs/scripts/gen_api.py]
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - section-index
   - mkdocstrings:
       handlers:
         python:
           paths: [src]
           options:
             docstring_style: numpy
-            show_source: false
-            heading_level: 3
+            docstring_section_style: table
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_signature_annotations: true
+            separate_signature: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            heading_level: 2
             members_order: source
+            filters: ["!^_"]
+            docstring_options:
+              ignore_init_summary: true

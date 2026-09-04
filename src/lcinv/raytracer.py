@@ -25,7 +25,17 @@ import numpy as np
 from .mesh import Polyhedron
 from .scattering import ScatteringLaw
 
-__all__ = ["RayTracer", "hexagonal_facet_samples"]
+try:  # pragma: no cover - exercised only when the extension is installed
+    import lcinv_rust as _accel
+except ImportError:  # pragma: no cover
+    _accel = None
+
+__all__ = ["RayTracer", "hexagonal_facet_samples", "ACCELERATED"]
+
+#: True when the optional Rust kernels (``lcinv-rust``) are available.  They
+#: are a drop-in replacement for the NumPy path, not a different algorithm: the
+#: test suite asserts the two agree element for element.
+ACCELERATED = _accel is not None
 
 
 def hexagonal_facet_samples(n: int) -> np.ndarray:
@@ -80,6 +90,10 @@ class RayTracer:
         Seed for those perturbations, so a tracer is reproducible.
     tol:
         Relative geometric tolerance, in units of the body's size.
+    backend:
+        ``"auto"`` uses the Rust kernels when ``lcinv-rust`` is installed and
+        NumPy otherwise; ``"python"`` forces the NumPy path, which is what the
+        cross-checking tests compare against.
 
     Attributes
     ----------
@@ -96,7 +110,16 @@ class RayTracer:
         jitter: float = 0.15,
         seed: int | None = 0,
         tol: float = 1e-9,
+        backend: str = "auto",
     ) -> None:
+        if backend not in ("auto", "rust", "python"):
+            raise ValueError("backend must be 'auto', 'rust' or 'python'")
+        if backend == "rust" and _accel is None:
+            raise RuntimeError(
+                "lcinv-rust is not installed; build it with\n"
+                "    maturin develop --release -m src/lcinv_rust/Cargo.toml"
+            )
+        self.backend = backend
         self.body = body
         self.tol = float(tol)
         self.scale = float(np.abs(body.vertices).max()) or 1.0
@@ -117,6 +140,30 @@ class RayTracer:
         return bary
 
     def _build_blockers(self) -> None:
+        if _accel is not None and self.backend != "python":
+            self._build_blockers_rust()
+            return
+        self._build_blockers_numpy()
+
+    def _build_blockers_rust(self) -> None:
+        """Section 2's precomputation, in Rust."""
+        body = self.body
+        pair_facet, pair_blocker, hull, height = _accel.build_blockers(
+            np.ascontiguousarray(body.vertices),
+            np.ascontiguousarray(body.facets, dtype=np.int64),
+            np.ascontiguousarray(body.normals),
+            np.ascontiguousarray(body.facet_centroids),
+            self._eps,
+        )
+        self.hull_facet_mask = hull
+        self.blocker_height = height
+        self._pair_facet = pair_facet
+        self._pair_blocker = pair_blocker
+        counts = np.bincount(pair_facet, minlength=len(body.facets))
+        self.blocker_ids = np.split(pair_blocker, np.cumsum(counts)[:-1])
+        self._finish_blocker_setup()
+
+    def _build_blockers_numpy(self) -> None:
         body = self.body
         verts, facets = body.vertices, body.facets
         normals, centroids = body.normals, body.facet_centroids
@@ -174,6 +221,11 @@ class RayTracer:
         self._pair_blocker = (
             np.concatenate(blocker_ids) if counts.sum() else np.empty(0, dtype=np.int64)
         )
+        self._finish_blocker_setup()
+
+    def _finish_blocker_setup(self) -> None:
+        """Cache the per-pair triangle data and the nudged test points."""
+        body = self.body
         tri = body.vertices[body.facets[self._pair_blocker]]
         self._pv0 = tri[:, 0]
         self._pe1 = tri[:, 1] - tri[:, 0]
@@ -184,8 +236,17 @@ class RayTracer:
         # edge-neighbours cannot register as blockers.
         pts = np.einsum("fkj,sk->fsj", body.vertices[body.facets], self._samples)
         pts = pts + 8.0 * self._eps * body.normals[:, None, :]
-        self._sample_points = pts  # (F, S, 3)
+        self._sample_points = np.ascontiguousarray(pts)  # (F, S, 3)
         self._origins = pts[self._pair_facet]  # (P, S, 3)
+        # CSR start offsets, which is what the Rust kernel indexes with.
+        counts = np.bincount(self._pair_facet, minlength=len(body.facets))
+        self._pair_start = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+        # The Rust kernel looks triangles up by facet id rather than by pair,
+        # so it needs one entry per facet instead of one per (facet, blocker).
+        tri_all = body.vertices[body.facets]
+        self._pv0_by_facet = tri_all[:, 0]
+        self._pe1_by_facet = tri_all[:, 1] - tri_all[:, 0]
+        self._pe2_by_facet = tri_all[:, 2] - tri_all[:, 0]
 
     @property
     def n_subpoints(self) -> int:
@@ -292,6 +353,21 @@ class RayTracer:
         ``L = sum_j S(mu_j, mu0_j) varpi_j A_j f_j`` where ``f_j`` is the
         visible-and-illuminated fraction from
         :meth:`visible_illuminated_fraction`.
+
+        Parameters
+        ----------
+        earth, sun:
+            Unit vectors ``E`` and ``E0`` in the body frame.
+        law:
+            The scattering law ``S``.
+        alpha:
+            Solar phase angle in radians; derived from the two vectors when
+            omitted, and only needed by phase-dependent laws.
+
+        Returns
+        -------
+        float
+            The total brightness ``L``.
         """
         e = np.asarray(earth, dtype=float)
         e0 = np.asarray(sun, dtype=float)
@@ -332,10 +408,66 @@ class RayTracer:
         e0 = np.atleast_2d(np.asarray(sun, dtype=float))
         if len(e) != len(e0):
             raise ValueError("earth and sun must have the same length")
-        a = None if alpha is None else np.asarray(alpha, dtype=float)
+        e = e / np.linalg.norm(e, axis=1, keepdims=True)
+        e0 = e0 / np.linalg.norm(e0, axis=1, keepdims=True)
+        if alpha is None:
+            a = np.arccos(np.clip(np.einsum("ij,ij->i", e, e0), -1.0, 1.0))
+        else:
+            a = np.broadcast_to(np.asarray(alpha, dtype=float), (len(e),))
+
+        if _accel is not None and self.backend != "python":
+            frac = self.visible_illuminated_fractions(e, e0)
+            normals = self.body.normals
+            mu = e @ normals.T
+            mu0 = e0 @ normals.T
+            s = law(mu, mu0, a[:, None] if law.uses_phase_angle else None)
+            weight = self.body.albedo * self.body.areas
+            return (s * frac * weight).sum(axis=1)
+
         return np.asarray(
             [
-                self.brightness(e[i], e0[i], law, None if a is None else float(a[i]))
+                self.brightness(e[i], e0[i], law, float(a[i]))
                 for i in range(len(e))
             ]
+        )
+
+    def visible_illuminated_fractions(
+        self, earth: np.ndarray, sun: np.ndarray
+    ) -> np.ndarray:
+        """``(N, F)`` visible-and-illuminated fractions for many geometries.
+
+        The Rust kernel computes every observation in one call and in parallel;
+        without it this falls back to looping
+        :meth:`visible_illuminated_fraction`.
+
+        Parameters
+        ----------
+        earth, sun:
+            ``(N, 3)`` body-frame directions; normalised internally.
+
+        Returns
+        -------
+        numpy.ndarray
+            ``(N, F)`` fractions in ``[0, 1]``.
+        """
+        e = np.atleast_2d(np.asarray(earth, dtype=float))
+        e0 = np.atleast_2d(np.asarray(sun, dtype=float))
+        e = e / np.linalg.norm(e, axis=1, keepdims=True)
+        e0 = e0 / np.linalg.norm(e0, axis=1, keepdims=True)
+        if _accel is None or self.backend == "python":
+            return np.asarray(
+                [self.visible_illuminated_fraction(e[i], e0[i]) for i in range(len(e))]
+            )
+        return _accel.trace_fractions(
+            np.ascontiguousarray(e),
+            np.ascontiguousarray(e0),
+            np.ascontiguousarray(self.body.normals),
+            np.ascontiguousarray(self._pv0_by_facet),
+            np.ascontiguousarray(self._pe1_by_facet),
+            np.ascontiguousarray(self._pe2_by_facet),
+            self._sample_points,
+            self._pair_start,
+            np.ascontiguousarray(self._pair_blocker, dtype=np.int64),
+            np.ascontiguousarray(self.hull_facet_mask),
+            self._eps,
         )

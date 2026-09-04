@@ -59,10 +59,12 @@ class OctantTriangulation:
 
     @property
     def n_vertices(self) -> int:
+        """Number of vertices, ``4 N^2 + 2`` for ``N`` rows (Appendix A)."""
         return int(self.vertices.shape[0])
 
     @property
     def n_facets(self) -> int:
+        """Number of facets, ``8 N^2`` for ``N`` rows (Appendix A)."""
         return int(self.facets.shape[0])
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
@@ -226,6 +228,13 @@ def facet_normals_and_areas(
     vertices: np.ndarray, facets: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Outward unit normals, areas and centroids of triangular facets.
+
+    Parameters
+    ----------
+    vertices:
+        ``(V, 3)`` vertex coordinates.
+    facets:
+        ``(F, 3)`` vertex indices, counter-clockwise seen from outside.
 
     Returns
     -------

@@ -69,17 +69,28 @@ class HullResult:
         Mapping ``vertex index -> sorted list of adjacent hull vertices``,
         which is the form Appendix B's algorithm produces natively ("the hull
         obtained the way described above consists of the lists of vertices
-        connected to each vertex").
+        connected to each vertex").  Computed on first access and cached:
+        Minkowski minimisation builds thousands of hulls inside its line search
+        and needs none of them, so building this eagerly cost more than the
+        hulls themselves.
     """
 
     points: np.ndarray
     vertices: np.ndarray
     simplices: np.ndarray
     equations: np.ndarray
-    neighbours: dict[int, list[int]]
+    _neighbours: "dict[int, list[int]] | None" = None
+
+    @property
+    def neighbours(self) -> dict[int, list[int]]:
+        """Adjacency lists, computed on first access."""
+        if self._neighbours is None:
+            self._neighbours = _neighbours_from_simplices(self.simplices)
+        return self._neighbours
 
     @property
     def n_facets(self) -> int:
+        """Number of triangles on the hull."""
         return int(self.simplices.shape[0])
 
     def vertex_points(self) -> np.ndarray:
@@ -220,7 +231,6 @@ def convex_hull(points: np.ndarray, method: str = "auto") -> HullResult:
         vertices=np.asarray(hull.vertices),
         simplices=simplices,
         equations=np.asarray(hull.equations, dtype=float),
-        neighbours=_neighbours_from_simplices(simplices),
     )
 
 
@@ -235,13 +245,21 @@ def _orient_outward(pts: np.ndarray, simplices: np.ndarray, equations: np.ndarra
 
 
 def _neighbours_from_simplices(simplices: np.ndarray) -> dict[int, list[int]]:
-    adj: dict[int, set[int]] = {}
-    for tri in simplices:
-        for i in range(3):
-            u, v = int(tri[i]), int(tri[(i + 1) % 3])
-            adj.setdefault(u, set()).add(v)
-            adj.setdefault(v, set()).add(u)
-    return {k: sorted(v) for k, v in adj.items()}
+    """Vertex adjacency of a triangulated hull, as sorted lists."""
+    tri = np.asarray(simplices, dtype=np.int64)
+    if tri.size == 0:  # pragma: no cover - empty hull
+        return {}
+    a = np.concatenate([tri[:, 0], tri[:, 1], tri[:, 2]])
+    b = np.concatenate([tri[:, 1], tri[:, 2], tri[:, 0]])
+    # Both directions, then deduplicate as pairs.
+    u = np.concatenate([a, b])
+    v = np.concatenate([b, a])
+    pairs = np.unique(np.column_stack([u, v]), axis=0)
+    keys, starts = np.unique(pairs[:, 0], return_index=True)
+    ends = np.append(starts[1:], len(pairs))
+    return {
+        int(k): pairs[s:e, 1].tolist() for k, s, e in zip(keys, starts, ends, strict=True)
+    }
 
 
 # --------------------------------------------------------------------------
@@ -313,7 +331,6 @@ def gift_wrap_hull(points: np.ndarray, tol: float = 1e-12) -> HullResult:
         vertices=np.unique(simplices_arr.ravel()),
         simplices=simplices_arr,
         equations=np.column_stack([normals, offsets]),
-        neighbours=_neighbours_from_simplices(simplices_arr),
     )
 
 
@@ -333,7 +350,6 @@ def _retriangulate_flat_faces(pts: np.ndarray, simplices: np.ndarray) -> np.ndar
         vertices=np.unique(simplices.ravel()),
         simplices=simplices,
         equations=np.column_stack([normals, offsets]),
-        neighbours={},
     )
     scale = max(1.0, float(np.abs(pts).max()))
     polygons, _, _ = provisional.merge_coplanar(tol=1e-9 * scale)

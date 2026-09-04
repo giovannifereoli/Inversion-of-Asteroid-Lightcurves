@@ -1,0 +1,20 @@
+[package]
+name = "lcinv_rust"
+version = "0.1.0"
+edition = "2021"
+description = "Rust kernels for the lcinv asteroid lightcurve inversion package"
+license = "MIT"
+
+[lib]
+name = "lcinv_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.26", features = ["extension-module", "abi3-py310"] }
+numpy = "0.26"
+rayon = "1.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

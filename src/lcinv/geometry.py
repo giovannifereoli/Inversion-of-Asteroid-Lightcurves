@@ -47,7 +47,20 @@ def rot_z(angle: float | np.ndarray) -> np.ndarray:
 
 
 def spherical_to_unit(theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
-    """Unit vectors from polar angle ``theta`` and azimuth ``phi`` (radians)."""
+    """Unit vectors from polar angle and azimuth.
+
+    Parameters
+    ----------
+    theta:
+        Polar angle in radians, zero at the north pole.
+    phi:
+        Azimuth in radians.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``(..., 3)`` unit vectors, one per input angle pair.
+    """
     theta, phi = np.asarray(theta, float), np.asarray(phi, float)
     st = np.sin(theta)
     return np.stack([st * np.cos(phi), st * np.sin(phi), np.cos(theta)], axis=-1)
@@ -143,7 +156,22 @@ class SpinState:
         return out.reshape(np.shape(vec_ecl))
 
     def to_ecliptic_frame(self, vec_ast: np.ndarray, jd: np.ndarray | float) -> np.ndarray:
-        """Rotate body-frame vectors into ecliptic coordinates."""
+        """Rotate body-frame vectors into ecliptic coordinates.
+
+        The inverse of :meth:`to_asteroid_frame`.
+
+        Parameters
+        ----------
+        vec_ast:
+            ``(3,)`` or ``(N, 3)`` body-frame vectors.
+        jd:
+            Scalar epoch, or one epoch per row of ``vec_ast``.
+
+        Returns
+        -------
+        numpy.ndarray
+            Same shape as ``vec_ast``, in ecliptic coordinates.
+        """
         v = np.atleast_2d(np.asarray(vec_ast, dtype=float))
         jd_arr = np.atleast_1d(np.asarray(jd, dtype=float))
         if jd_arr.size == 1:

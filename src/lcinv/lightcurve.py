@@ -132,10 +132,20 @@ class Lightcurve:
         return float(2.5 * np.log10(self.brightness.max() / self.brightness.min()))
 
     def unit_vectors(self) -> tuple[np.ndarray, np.ndarray]:
-        """Normalised ecliptic Sun and Earth directions."""
-        s = self.sun / np.linalg.norm(self.sun, axis=1, keepdims=True)
-        e = self.earth / np.linalg.norm(self.earth, axis=1, keepdims=True)
-        return s, e
+        """Normalised ecliptic Sun and Earth directions.
+
+        Cached: these depend only on the observation, never on the rotation
+        state, and an inversion that frees the pole rebuilds its design matrix
+        hundreds of times.
+        """
+        cached = self.meta.get("_unit_vectors")
+        if cached is None:
+            cached = (
+                self.sun / np.linalg.norm(self.sun, axis=1, keepdims=True),
+                self.earth / np.linalg.norm(self.earth, axis=1, keepdims=True),
+            )
+            self.meta["_unit_vectors"] = cached
+        return cached
 
     def body_directions(self, spin: SpinState) -> tuple[np.ndarray, np.ndarray]:
         """Sun and Earth unit vectors ``E0`` and ``E`` in the body frame.
@@ -170,6 +180,17 @@ class Lightcurve:
 
         Section 3.5 reports that "even considerable noise (from 5 to 10%) [...]
         does not cause a need for regularization".
+
+        Parameters
+        ----------
+        level:
+            Relative noise level; ``0.05`` is the paper's 5%.
+        seed:
+            Seed for the perturbations.
+
+        Returns
+        -------
+        Lightcurve
         """
         rng = np.random.default_rng(seed)
         factor = 1.0 + level * rng.standard_normal(len(self))
@@ -197,6 +218,8 @@ class LightcurveSet:
 
     def __init__(self, curves: list[Lightcurve] | tuple[Lightcurve, ...] = ()) -> None:
         self.curves: list[Lightcurve] = list(curves)
+        self._ecliptic: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+        self._phase_angles: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.curves)
@@ -215,6 +238,8 @@ class LightcurveSet:
     def append(self, curve: Lightcurve) -> None:
         """Add one curve."""
         self.curves.append(curve)
+        self._ecliptic = None
+        self._phase_angles = None
 
     # ------------------------------------------------------------------
     @property
@@ -239,21 +264,36 @@ class LightcurveSet:
 
     @property
     def phase_angles(self) -> np.ndarray:
-        """All phase angles concatenated, in radians."""
-        return np.concatenate([c.phase_angles for c in self.curves])
+        """All phase angles concatenated, in radians.  Cached."""
+        if self._phase_angles is None:
+            self._phase_angles = np.concatenate([c.phase_angles for c in self.curves])
+        return self._phase_angles
 
     @property
     def all_calibrated(self) -> bool:
         """True when every curve is absolute photometry."""
         return bool(self.curves) and all(c.calibrated for c in self.curves)
 
+    def ecliptic_directions(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Concatenated ecliptic Sun and Earth unit vectors, and the epochs.
+
+        Built once and cached.  Rotating into the body frame is a single call
+        on these arrays, rather than one call per lightcurve per design-matrix
+        build.
+        """
+        if self._ecliptic is None:
+            pairs = [c.unit_vectors() for c in self.curves]
+            self._ecliptic = (
+                np.ascontiguousarray(np.vstack([p[0] for p in pairs])),
+                np.ascontiguousarray(np.vstack([p[1] for p in pairs])),
+                np.concatenate([c.jd for c in self.curves]),
+            )
+        return self._ecliptic
+
     def body_directions(self, spin: SpinState) -> tuple[np.ndarray, np.ndarray]:
         """Concatenated body-frame Sun and Earth unit vectors for the whole set."""
-        pairs = [c.body_directions(spin) for c in self.curves]
-        return (
-            np.vstack([p[0] for p in pairs]),
-            np.vstack([p[1] for p in pairs]),
-        )
+        sun, earth, jd = self.ecliptic_directions()
+        return spin.to_asteroid_frame(sun, jd), spin.to_asteroid_frame(earth, jd)
 
     def filter(
         self,
@@ -262,7 +302,21 @@ class LightcurveSet:
         max_phase_deg: float | None = None,
         calibrated: bool | None = None,
     ) -> LightcurveSet:
-        """Select a subset by point count, phase-angle range or calibration."""
+        """Select a subset by point count, phase-angle range or calibration.
+
+        Parameters
+        ----------
+        min_points:
+            Drop curves with fewer points than this.
+        min_phase_deg, max_phase_deg:
+            Keep only curves whose *mean* solar phase angle lies in this range.
+        calibrated:
+            Keep only absolute (``True``) or only relative (``False``) curves.
+
+        Returns
+        -------
+        LightcurveSet
+        """
         out = []
         for c in self.curves:
             if len(c) < min_points:
@@ -284,6 +338,18 @@ class LightcurveSet:
         direction and phase angle, so the result honours Section 3.5's "wide
         range of observing geometries" rather than clustering on one
         apparition.
+
+        Parameters
+        ----------
+        n:
+            Number of curves to keep; the whole set is returned if it is
+            already smaller.
+        seed:
+            Seed for the first pick, which the greedy selection grows from.
+
+        Returns
+        -------
+        LightcurveSet
         """
         if n >= len(self.curves):
             return LightcurveSet(self.curves)
@@ -362,7 +428,19 @@ class LightcurveSet:
         }
 
     def with_noise(self, level: float, seed: int | None = 0) -> LightcurveSet:
-        """Copy with independent noise added to every curve."""
+        """Copy with independent noise added to every curve.
+
+        Parameters
+        ----------
+        level:
+            Relative noise level applied to each curve.
+        seed:
+            Seed for the per-curve seeds, so the whole set is reproducible.
+
+        Returns
+        -------
+        LightcurveSet
+        """
         rng = np.random.default_rng(seed)
         return LightcurveSet(
             [c.with_noise(level, int(rng.integers(1 << 31))) for c in self.curves]

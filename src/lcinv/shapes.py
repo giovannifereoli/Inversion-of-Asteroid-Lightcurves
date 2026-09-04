@@ -39,7 +39,19 @@ __all__ = [
 
 
 def sphere(radius: float = 1.0, n_rows: int = 8) -> Polyhedron:
-    """Unit-normal sphere from the octant triangulation."""
+    """Sphere built on the octant triangulation of Appendix A.
+
+    Parameters
+    ----------
+    radius:
+        Sphere radius.
+    n_rows:
+        ``N`` of the octant triangulation, giving ``8 N^2`` facets.
+
+    Returns
+    -------
+    Polyhedron
+    """
     s = octant_triangulation(n_rows)
     return Polyhedron(s.vertices * float(radius), s.facets)
 
@@ -50,6 +62,17 @@ def ellipsoid(a: float, b: float, c: float, n_rows: int = 8) -> Polyhedron:
     Section 3.1 uses "the facet normals of a sphere or a triaxial ellipsoid
     triangulated in the standard manner", and Section 3.2 suggests "a suitable
     triaxial ellipsoid" as the initial guess for the coefficients ``a_lm``.
+
+    Parameters
+    ----------
+    a, b, c:
+        Semi-axes along ``x``, ``y`` and ``z``.
+    n_rows:
+        ``N`` of the octant triangulation, giving ``8 N^2`` facets.
+
+    Returns
+    -------
+    Polyhedron
     """
     s = octant_triangulation(n_rows)
     return Polyhedron(s.vertices * np.array([a, b, c], dtype=float), s.facets)
